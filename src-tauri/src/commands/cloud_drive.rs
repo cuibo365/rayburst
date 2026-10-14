@@ -11,6 +11,7 @@
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_store::StoreExt;
 
@@ -29,13 +30,64 @@ const BAIDU_FILE_LIST_URL: &str = "https://pan.baidu.com/rest/2.0/xpan/file?meth
 /// Injection script embedded at compile time.
 const INJECT_SCRIPT: &str = include_str!("../../resources/cloud-drive-inject.js");
 
-/// Logical bounds for the embedded netdisk webview (relative to the window).
+/// Logical bounds for the embedded netdisk window (relative to the main window).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WebviewBounds {
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Last reported content-area bounds (relative to the main window). Kept so the
+/// overlay window can be re-aligned when the main window moves or resizes.
+static CLOUD_BOUNDS: Mutex<Option<WebviewBounds>> = Mutex::new(None);
+
+/// Convert main-window-relative logical bounds to screen logical coordinates by
+/// adding the main window's inner (client-area) position, accounting for DPI.
+fn screen_geometry_from_bounds(
+    app: &AppHandle,
+    bounds: WebviewBounds,
+) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
+    let main = app.get_window("main")?;
+    let inner = main.inner_position().ok()?;
+    let scale = main.scale_factor().ok()?;
+    let x = inner.x as f64 / scale + bounds.x;
+    let y = inner.y as f64 / scale + bounds.y;
+    Some((
+        tauri::LogicalPosition::new(x, y),
+        tauri::LogicalSize::new(bounds.width, bounds.height),
+    ))
+}
+
+/// Register main-window move/resize listeners so the netdisk overlay window
+/// follows the main window (and hides when the main window is minimized).
+pub fn init_main_window_sync(app: &tauri::AppHandle) {
+    let Some(main) = app.get_window("main") else {
+        return;
+    };
+    let handle = app.clone();
+    main.on_window_event(move |event| {
+        let win = handle.get_webview_window(WEBVIEW_LABEL);
+        let Some(win) = win else {
+            return;
+        };
+        let bounds = *CLOUD_BOUNDS.lock().unwrap();
+        match event {
+            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                if let Some(bounds) = bounds {
+                    if let Some((pos, size)) = screen_geometry_from_bounds(&handle, bounds) {
+                        let _ = win.set_position(pos);
+                        let _ = win.set_size(size);
+                    }
+                }
+            }
+            tauri::WindowEvent::Minimized(_) => {
+                let _ = win.hide();
+            }
+            _ => {}
+        }
+    });
 }
 
 /// A file checked by the user in the Baidu Netdisk page (sent by the injected script).
@@ -72,75 +124,84 @@ fn pan_url() -> Result<tauri::Url, AppError> {
         .map_err(|e| AppError::CloudDrive(format!("URL 解析失败: {e}")))
 }
 
-/// Create (or show) the embedded Baidu Netdisk webview filling the content area.
+/// Create (or show) the Baidu Netdisk window overlaying the content area.
+///
+/// Implemented as a standalone borderless `WebviewWindow` (stable API) rather
+/// than a child webview: child webviews are unstable on Windows and can fail
+/// with WebView2 error 0x8007139F while freezing the main thread.
 #[tauri::command]
 pub async fn cloud_drive_baidu_open(
     app: AppHandle,
     bounds: WebviewBounds,
 ) -> Result<(), AppError> {
-    if let Some(webview) = app.get_webview(WEBVIEW_LABEL) {
-        let _ = webview.set_position(tauri::LogicalPosition::new(bounds.x, bounds.y));
-        let _ = webview.set_size(tauri::LogicalSize::new(bounds.width, bounds.height));
-        let _ = webview.show();
-        let _ = webview.set_focus();
-        // Revive a dead webview: if the current URL is blank/unavailable, reload.
-        match webview.url() {
+    *CLOUD_BOUNDS.lock().unwrap() = Some(bounds);
+    let (pos, size) = screen_geometry_from_bounds(&app, bounds)
+        .unwrap_or((tauri::LogicalPosition::new(bounds.x, bounds.y), tauri::LogicalSize::new(bounds.width, bounds.height)));
+
+    if let Some(win) = app.get_webview_window(WEBVIEW_LABEL) {
+        let _ = win.set_position(pos);
+        let _ = win.set_size(size);
+        let _ = win.show();
+        let _ = win.set_focus();
+        // Revive a dead window: if the current URL is blank/unavailable, reload.
+        match win.url() {
             Ok(url) => {
-                log::info!("cloud-drive: reopening webview at {}", url);
+                log::info!("cloud-drive: reopening window at {}", url);
                 if url.scheme() == "about" || url.as_str() == "about:blank" {
-                    let _ = webview.reload();
+                    let _ = win.reload();
                 }
             }
             Err(e) => {
-                log::warn!("cloud-drive: webview url unavailable ({e}), reloading");
-                let _ = webview.reload();
+                log::warn!("cloud-drive: window url unavailable ({e}), reloading");
+                let _ = win.reload();
             }
         }
         return Ok(());
     }
 
-    let window = app
-        .get_window("main")
-        .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?;
     // Standard Edge/Chrome UA so Baidu serves the full page (WebView2's default
     // UA can trigger a compatibility downgrade / blank render on some pan pages).
-    let builder = tauri::webview::WebviewBuilder::new(WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
+    let win = tauri::WebviewWindowBuilder::new(&app, WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
         .user_agent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
         )
-        .initialization_script(INJECT_SCRIPT);
-    let webview = window
-        .add_child(
-            builder,
-            tauri::LogicalPosition::new(bounds.x, bounds.y),
-            tauri::LogicalSize::new(bounds.width, bounds.height),
-        )
+        .initialization_script(INJECT_SCRIPT)
+        .position(pos.x, pos.y)
+        .inner_size(size.width, size.height)
+        .decorations(false)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .build()
         .map_err(|e| AppError::CloudDrive(format!("创建网盘窗口失败: {e}")))?;
-    let _ = webview.set_focus();
-    if let Ok(url) = webview.url() {
-        log::info!("cloud-drive: created webview, url={url}");
+    let _ = win.set_focus();
+    if let Ok(url) = win.url() {
+        log::info!("cloud-drive: created window, url={url}");
     }
     Ok(())
 }
 
-/// Update the embedded webview's bounds (called on window/content resize).
+/// Update the overlay window's bounds (called on window/content resize).
 #[tauri::command]
 pub async fn cloud_drive_baidu_resize(
     app: AppHandle,
     bounds: WebviewBounds,
 ) -> Result<(), AppError> {
-    if let Some(webview) = app.get_webview(WEBVIEW_LABEL) {
-        let _ = webview.set_position(tauri::LogicalPosition::new(bounds.x, bounds.y));
-        let _ = webview.set_size(tauri::LogicalSize::new(bounds.width, bounds.height));
+    *CLOUD_BOUNDS.lock().unwrap() = Some(bounds);
+    if let Some(win) = app.get_webview_window(WEBVIEW_LABEL) {
+        if let Some((pos, size)) = screen_geometry_from_bounds(&app, bounds) {
+            let _ = win.set_position(pos);
+            let _ = win.set_size(size);
+        }
     }
     Ok(())
 }
 
-/// Hide the embedded webview and tell the frontend to restore its own view.
+/// Hide the overlay window and tell the frontend to restore its own view.
 #[tauri::command]
 pub async fn cloud_drive_baidu_close(app: AppHandle) -> Result<(), AppError> {
-    if let Some(webview) = app.get_webview(WEBVIEW_LABEL) {
-        let _ = webview.hide();
+    if let Some(win) = app.get_webview_window(WEBVIEW_LABEL) {
+        let _ = win.hide();
     }
     let _ = app.emit("cloud-drive:hidden", ());
     Ok(())

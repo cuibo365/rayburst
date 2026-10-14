@@ -241,6 +241,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     );
     native_messaging::schedule_repair(app.handle());
     commands::protocol::repair_activation_protocol(app.handle());
+    commands::cloud_drive::init_main_window_sync(app.handle());
     #[cfg(target_os = "macos")]
     {
         let m = menu::build_menu(handle)?;
