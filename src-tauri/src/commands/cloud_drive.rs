@@ -246,12 +246,12 @@ pub fn cloud_drive_baidu_nav_open(
 ) -> Result<(), AppError> {
     let target = url.unwrap_or_else(|| PAN_URL.to_string());
     let main = app
-        .get_window("main")
+        .get_webview("main")
         .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?;
     let parsed = target
         .parse::<tauri::Url>()
         .map_err(|e| AppError::CloudDrive(format!("URL 解析失败: {e}")))?;
-    log::info!("cloud-drive: navigating main window to {target}");
+    log::info!("cloud-drive: navigating main webview to {target}");
     main.navigate(parsed)
         .map_err(|e| AppError::CloudDrive(format!("导航失败: {e}")))?;
     spawn_nav_injector(app.clone());
@@ -265,7 +265,7 @@ fn spawn_nav_injector(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         for i in 0..15 {
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            let Some(main) = app.get_window("main") else {
+            let Some(main) = app.get_webview("main") else {
                 return;
             };
             let _ = main.eval(NAV_SCRIPT);
