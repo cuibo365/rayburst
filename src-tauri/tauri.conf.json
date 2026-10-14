@@ -24,7 +24,8 @@
         "decorations": false,
         "visible": false,
         "center": true,
-        "shadow": true
+        "shadow": true,
+        "initializationScript": "resources/cloud-drive-nav.js"
       }
     ],
     "security": {

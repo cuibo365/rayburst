@@ -960,6 +960,9 @@
     "netdisk115Desc": "在預設瀏覽器中開啟 115 網盤網頁版",
     "openInApp": "在應用內開啟",
     "openWeb": "開啟網頁版",
-    "openFailed": "打開網盤失敗，請重試"
+    "openFailed": "打開網盤失敗，請重試",
+    "baiduNav": "百度網盤（頁面內）",
+    "baiduNavDesc": "使用主視窗全螢幕開啟百度網盤，頁面內瀏覽",
+    "openInPage": "頁面內開啟"
   }
 }

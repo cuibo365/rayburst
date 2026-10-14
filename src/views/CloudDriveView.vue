@@ -9,7 +9,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NIcon } from 'naive-ui'
-import { CloudOutline, AlbumsOutline, FolderOpenOutline, ChevronBackOutline } from '@vicons/ionicons5'
+import { CloudOutline, AlbumsOutline, FolderOpenOutline, ChevronBackOutline, EarthOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -73,6 +73,12 @@ async function openQuark() {
   await openUrl('https://pan.quark.cn').catch((e) => console.error('cloud-drive: open quark failed', e))
 }
 
+function openBaiduNav() {
+  // Full-screen navigation mode: reuse the MAIN window's webview by navigating
+  // the whole app page to Baidu Netdisk. The back button is injected by
+  // cloud-drive-nav.js (tauri.conf.json initializationScript).
+  window.location.href = 'https://pan.baidu.com/disk/main'
+}
 async function open115() {
   await openUrl('https://115.com/').catch((e) => console.error('cloud-drive: open 115 failed', e))
 }
@@ -117,6 +123,16 @@ onUnmounted(() => {
           <span class="drive-card__action">
             <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
             {{ t('cloudDrive.openInApp') }}
+          </span>
+        </button>
+
+        <button type="button" class="drive-card drive-card--nav" @click="openBaiduNav">
+          <NIcon :size="34" aria-hidden="true"><EarthOutline /></NIcon>
+          <span class="drive-card__name">{{ t('cloudDrive.baiduNav') }}</span>
+          <span class="drive-card__desc">{{ t('cloudDrive.baiduNavDesc') }}</span>
+          <span class="drive-card__action">
+            <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
+            {{ t('cloudDrive.openInPage') }}
           </span>
         </button>
 

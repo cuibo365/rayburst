@@ -70,6 +70,7 @@ watch(
   { immediate: true, flush: 'post' },
 )
 const isTaskPage = computed(() => route.path.startsWith('/task'))
+const isPreferencePage = computed(() => route.path.startsWith('/preference'))
 const preferenceActions = providePreferenceActions()
 const activePreferenceActions = computed(() =>
   preferenceActions.value?.routeName === route.name ? preferenceActions.value : null,
@@ -784,7 +785,7 @@ onUnmounted(() => {
     <main class="content">
       <router-view v-slot="{ Component, route: viewRoute }">
         <Transition name="fade" mode="out-in" appear>
-          <component :is="Component" :key="isTaskPage ? viewRoute.path : 'preferences'" />
+          <component :is="Component" :key="viewRoute.path" />
         </Transition>
       </router-view>
     </main>
@@ -797,15 +798,7 @@ onUnmounted(() => {
     />
     <footer class="content-footer">
       <Transition name="fade" mode="out-in" appear>
-        <div v-if="!isTaskPage" id="preference-actions" key="preferences" :inert="isTaskPage">
-          <PreferenceActionBar
-            :is-dirty="activePreferenceActions?.isDirty ?? false"
-            :is-valid="activePreferenceActions?.isValid ?? false"
-            @save="activePreferenceActions?.save()"
-            @discard="activePreferenceActions?.discard()"
-          />
-        </div>
-        <div v-else key="tasks" class="task-pagination-control" :inert="!isTaskPage">
+        <div v-if="isTaskPage" key="tasks" class="task-pagination-control">
           <NPagination
             :page="taskPaginationPage"
             :page-size="taskPaginationPageSize"
@@ -817,6 +810,14 @@ onUnmounted(() => {
             :show-size-picker="!compactNavigation"
             @update:page="taskStore.setCurrentTaskPage"
             @update:page-size="taskStore.setTaskPageSize"
+          />
+        </div>
+        <div v-else-if="isPreferencePage" id="preference-actions" key="preferences">
+          <PreferenceActionBar
+            :is-dirty="activePreferenceActions?.isDirty ?? false"
+            :is-valid="activePreferenceActions?.isValid ?? false"
+            @save="activePreferenceActions?.save()"
+            @discard="activePreferenceActions?.discard()"
           />
         </div>
       </Transition>

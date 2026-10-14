@@ -960,6 +960,9 @@
     "netdisk115Desc": "在默认浏览器中打开 115 网盘网页版",
     "openInApp": "在应用内打开",
     "openWeb": "打开网页版",
-    "openFailed": "打开网盘失败，请重试"
+    "openFailed": "打开网盘失败，请重试",
+    "baiduNav": "百度网盘（页面内）",
+    "baiduNavDesc": "使用主窗口全屏打开百度网盘，页面内浏览",
+    "openInPage": "页面内打开"
   }
 }

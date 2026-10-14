@@ -960,6 +960,9 @@
     "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
     "openInApp": "Open in app",
     "openWeb": "Open web version",
-    "openFailed": "Failed to open the drive, please retry"
+    "openFailed": "Failed to open the drive, please retry",
+    "baiduNav": "Baidu Netdisk (in-page)",
+    "baiduNavDesc": "Open Baidu Netdisk full-screen inside the main window",
+    "openInPage": "Open in page"
   }
 }

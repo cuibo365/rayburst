@@ -132,6 +132,7 @@ pub async fn cloud_drive_baidu_open(
     bounds: WebviewBounds,
 ) -> Result<(), AppError> {
     *CLOUD_BOUNDS.lock().unwrap() = Some(bounds);
+    spawn_url_probe(app.clone());
     let (pos, size) = screen_geometry_from_bounds(&app, bounds)
         .unwrap_or((tauri::LogicalPosition::new(bounds.x, bounds.y), tauri::LogicalSize::new(bounds.width, bounds.height)));
 
@@ -140,20 +141,23 @@ pub async fn cloud_drive_baidu_open(
         let _ = win.set_size(size);
         let _ = win.show();
         let _ = win.set_focus();
-        // Revive a dead window: if the current URL is blank/unavailable, reload.
         match win.url() {
             Ok(url) => {
                 log::info!("cloud-drive: reopening window at {}", url);
                 if url.scheme() == "about" || url.as_str() == "about:blank" {
                     let _ = win.reload();
                 }
+                return Ok(());
             }
             Err(e) => {
-                log::warn!("cloud-drive: window url unavailable ({e}), reloading");
-                let _ = win.reload();
+                // Renderer is unresponsive (IPC to the webview failed). Reloading
+                // a wedged WebView2 process is unreliable, so destroy the window
+                // and recreate it below for a clean WebView2 process.
+                log::warn!("cloud-drive: window unresponsive ({e}), destroying and recreating");
+                let _ = win.destroy();
+                tauri::async_runtime::sleep(std::time::Duration::from_millis(300)).await;
             }
         }
-        return Ok(());
     }
 
     // Standard Edge/Chrome UA so Baidu serves the full page (WebView2's default
@@ -176,6 +180,27 @@ pub async fn cloud_drive_baidu_open(
         log::info!("cloud-drive: created window, url={url}");
     }
     Ok(())
+}
+
+/// Log the overlay window's URL every 2s for ~10s after open, so a blank page
+/// can be traced to which URL the webview actually landed on (pan home page,
+/// passport login redirect, or nothing at all).
+fn spawn_url_probe(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        for i in 0..5 {
+            tauri::async_runtime::sleep(std::time::Duration::from_secs(2)).await;
+            match app.get_webview_window(WEBVIEW_LABEL) {
+                Some(win) => match win.url() {
+                    Ok(url) => log::info!("cloud-drive: url probe #{i} -> {url}"),
+                    Err(e) => log::warn!("cloud-drive: url probe #{i} unavailable ({e})"),
+                },
+                None => {
+                    log::warn!("cloud-drive: url probe #{i} window gone");
+                    return;
+                }
+            }
+        }
+    });
 }
 
 /// Update the overlay window's bounds (called on window/content resize).
