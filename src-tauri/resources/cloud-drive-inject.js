@@ -80,12 +80,12 @@
   function toPayload(list) {
     var out = [];
     list.forEach(function (f) {
-      if (f.isdir) return;
       out.push({
         fs_id: f.fs_id,
         name: f.server_filename || f.name || '',
         size: f.size || 0,
-        path: f.path || ''
+        path: f.path || '',
+        isdir: !!f.isdir
       });
     });
     return out;

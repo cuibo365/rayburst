@@ -12,6 +12,7 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_store::StoreExt;
 
 const PAN_URL: &str = "https://pan.baidu.com/disk/main";
 const WEBVIEW_LABEL: &str = "cloud-drive-baidu";
@@ -22,6 +23,8 @@ const BAIDU_AUTHORIZE_URL: &str = "https://openapi.baidu.com/oauth/2.0/authorize
 const BAIDU_FILE_METAS_URL: &str = "https://pan.baidu.com/rest/2.0/xpan/multimedia";
 const BAIDU_APP_ID: u32 = 250528;
 const PAN_REFERER: &str = "https://pan.baidu.com/";
+/// List a folder's children (used to expand checked folders into files).
+const BAIDU_FILE_LIST_URL: &str = "https://pan.baidu.com/rest/2.0/xpan/file?method=list&showempty=1";
 
 /// Injection script embedded at compile time.
 const INJECT_SCRIPT: &str = include_str!("../../resources/cloud-drive-inject.js");
@@ -43,6 +46,9 @@ pub struct CloudDriveFile {
     pub size: u64,
     #[serde(default)]
     pub path: String,
+    /// True for folders; the backend expands them into their contained files.
+    #[serde(default)]
+    pub isdir: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -132,6 +138,12 @@ pub async fn cloud_drive_baidu_download(
 
     let bduss = read_bduss(&app).await?;
     let token = exchange_access_token(&bduss).await?;
+    // Expand checked folders into their contained files (recursively), so both
+    // files and folders can be downloaded like LinkSwift.
+    let files = expand_folders(&token, files).await?;
+    if files.is_empty() {
+        return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
+    }
     let links = fetch_dlinks(&token, &files).await?;
 
     // Rayburst's configured default download directory (config.json -> preferences.dir).
@@ -374,6 +386,81 @@ fn extract_html_field(html: &str, name: &str) -> Option<String> {
     let value_start = tail.find("value=\"")? + "value=\"".len();
     let value_end = tail[value_start..].find('"')? + value_start;
     Some(tail[value_start..value_end].to_string())
+}
+
+/// Expand checked folders into their contained files (recursively, mirroring
+/// LinkSwift's getFilesList). The list API returns full `path` values, so the
+/// relative-path -> `dir` mapping keeps working for files inside folders.
+/// A folder that fails to list is skipped (warned) so the rest can proceed.
+async fn expand_folders(
+    token: &str,
+    files: Vec<CloudDriveFile>,
+) -> Result<Vec<CloudDriveFile>, AppError> {
+    let client = http_client()?;
+    let mut result: Vec<CloudDriveFile> = Vec::new();
+    let mut queue: Vec<CloudDriveFile> = files;
+    let mut requests = 0usize;
+
+    while let Some(item) = queue.pop() {
+        if !item.isdir {
+            result.push(item);
+            continue;
+        }
+        let url = format!(
+            "{BAIDU_FILE_LIST_URL}&dir={}&access_token={}",
+            urlencoding::encode(&item.path),
+            token
+        );
+        requests += 1;
+        // Pace requests like LinkSwift: rest every 50 list calls.
+        if requests % 50 == 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        let resp = client
+            .get(&url)
+            .header("User-Agent", USER_AGENT)
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("展开文件夹失败: {e}")))?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("解析文件夹列表失败: {e}")))?;
+
+        let errno = json["errno"].as_i64().unwrap_or(-1);
+        if errno == 9019 {
+            return Err(AppError::CloudDrive(
+                "百度网盘访问令牌已过期，请刷新网盘页面后重试（errno=9019）".into(),
+            ));
+        }
+        if errno == 112 {
+            return Err(AppError::CloudDrive("百度网盘页面已过期，请刷新后重试".into()));
+        }
+        if errno != 0 {
+            log::warn!(
+                "cloud-drive: expand folder {} failed (errno={errno})",
+                item.path
+            );
+            continue;
+        }
+        let Some(list) = json["list"].as_array() else {
+            continue;
+        };
+        for child in list {
+            let path = child["path"].as_str().unwrap_or("").to_string();
+            if path.is_empty() {
+                continue;
+            }
+            queue.push(CloudDriveFile {
+                fs_id: child["fs_id"].as_u64().unwrap_or(0),
+                name: child["server_filename"].as_str().unwrap_or("").to_string(),
+                size: child["size"].as_u64().unwrap_or(0),
+                path,
+                isdir: child["isdir"].as_i64().unwrap_or(0) == 1,
+            });
+        }
+    }
+    Ok(result)
 }
 
 /// Fetch dlink(s) for the selected files (batched by 50, like LinkSwift).
