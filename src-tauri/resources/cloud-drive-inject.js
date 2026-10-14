@@ -1,4 +1,5 @@
-// Cloud Drive bridge injected into the Baidu Netdisk webview (pan.baidu.com).
+// Cloud Drive bridge injected into the Baidu Netdisk webview (pan.baidu.com),
+// in full-screen navigation mode inside the main window.
 //
 // Responsibilities:
 //   1. Mount a "下载到 Rayburst" button in the file-list toolbar (same mount
@@ -6,7 +7,7 @@
 //   2. Read the user's selected files from the page (three fallback sources).
 //   3. Invoke the Rust command `cloud_drive_baidu_download` so the backend can
 //      exchange cookies -> access_token -> dlink -> aria2.
-//   4. Provide a floating "返回 Rayburst" button that closes the embedded view.
+//   4. Provide a floating "返回 Rayburst" button that navigates back to the app.
 //
 // The Tauri IPC bridge is injected into this webview by Tauri itself; the
 // backend grants the pan.baidu.com origin access through capabilities/remote.json.
@@ -190,7 +191,7 @@
     btn.addEventListener('mouseenter', function () { btn.style.background = 'rgba(60,60,60,.9)'; });
     btn.addEventListener('mouseleave', function () { btn.style.background = 'rgba(24,24,24,.85)'; });
     btn.addEventListener('click', function () {
-      try { api('cloud_drive_baidu_close'); } catch (e) { /* ignore */ }
+      try { api('cloud_drive_nav_back'); } catch (e) { /* ignore */ }
     });
     document.body.appendChild(btn);
   }

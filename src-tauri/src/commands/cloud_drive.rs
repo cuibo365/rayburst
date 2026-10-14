@@ -1,9 +1,10 @@
 //! Cloud drive (网盘) integration.
 //!
-//! The Baidu Netdisk web version runs in a child webview that fills the app's
-//! content area (see `cloud_drive_baidu_open`). An initialization script
-//! (`resources/cloud-drive-inject.js`) is injected into that webview so the
-//! page can mount a "下载到 Rayburst" button and call the download command.
+//! The Baidu Netdisk web version runs **inside the main window's webview** in
+//! full-screen navigation mode (see `cloud_drive_baidu_nav_open`). A bridge
+//! script (`resources/cloud-drive-inject.js`) is injected so the page can
+//! mount a "返回 Rayburst" button and a download button calling the download
+//! command.
 //!
 //! Download chain (all public Baidu APIs, same as LinkSwift):
 //!   WebView cookie store -> BDUSS -> openapi authorize -> access_token
@@ -11,8 +12,7 @@
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 const PAN_URL: &str = "https://pan.baidu.com/disk/main";
@@ -27,69 +27,10 @@ const PAN_REFERER: &str = "https://pan.baidu.com/";
 /// List a folder's children (used to expand checked folders into files).
 const BAIDU_FILE_LIST_URL: &str = "https://pan.baidu.com/rest/2.0/xpan/file?method=list&showempty=1";
 
-/// Injection script embedded at compile time (overlay-window download support).
+/// Injection script embedded at compile time (download + back button on the
+/// Baidu page). Injected into the main window both via the config-level
+/// initializationScript and via repeated eval in spawn_nav_injector.
 const INJECT_SCRIPT: &str = include_str!("../../resources/cloud-drive-inject.js");
-/// Nav-control script for full-screen navigation mode (back / minimize / close
-/// buttons on the Baidu page). Injected into the main window both via the
-/// config-level initializationScript and via repeated eval in spawn_nav_injector.
-const NAV_SCRIPT: &str = include_str!("../../resources/cloud-drive-nav.js");
-
-/// Logical bounds for the embedded netdisk window (relative to the main window).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct WebviewBounds {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-/// Last reported content-area bounds (relative to the main window). Kept so the
-/// overlay window can be re-aligned when the main window moves or resizes.
-static CLOUD_BOUNDS: Mutex<Option<WebviewBounds>> = Mutex::new(None);
-
-/// Convert main-window-relative logical bounds to screen logical coordinates by
-/// adding the main window's inner (client-area) position, accounting for DPI.
-fn screen_geometry_from_bounds(
-    app: &AppHandle,
-    bounds: WebviewBounds,
-) -> Option<(tauri::LogicalPosition<f64>, tauri::LogicalSize<f64>)> {
-    let main = app.get_window("main")?;
-    let inner = main.inner_position().ok()?;
-    let scale = main.scale_factor().ok()?;
-    let x = inner.x as f64 / scale + bounds.x;
-    let y = inner.y as f64 / scale + bounds.y;
-    Some((
-        tauri::LogicalPosition::new(x, y),
-        tauri::LogicalSize::new(bounds.width, bounds.height),
-    ))
-}
-
-/// Register main-window move/resize listeners so the netdisk overlay window
-/// follows the main window.
-pub fn init_main_window_sync(app: &tauri::AppHandle) {
-    let Some(main) = app.get_window("main") else {
-        return;
-    };
-    let handle = app.clone();
-    main.on_window_event(move |event| {
-        let win = handle.get_webview_window(WEBVIEW_LABEL);
-        let Some(win) = win else {
-            return;
-        };
-        let bounds = *CLOUD_BOUNDS.lock().unwrap();
-        match event {
-            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
-                if let Some(bounds) = bounds {
-                    if let Some((pos, size)) = screen_geometry_from_bounds(&handle, bounds) {
-                        let _ = win.set_position(pos);
-                        let _ = win.set_size(size);
-                    }
-                }
-            }
-            _ => {}
-        }
-    });
-}
 
 /// A file checked by the user in the Baidu Netdisk page (sent by the injected script).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,144 +60,11 @@ fn http_client() -> Result<reqwest::Client, AppError> {
         .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
 }
 
-fn pan_url() -> Result<tauri::Url, AppError> {
-    PAN_URL
-        .parse()
-        .map_err(|e| AppError::CloudDrive(format!("URL 解析失败: {e}")))
-}
-
-/// Create (or show) the Baidu Netdisk window overlaying the content area.
-///
-/// Implemented as a standalone borderless `WebviewWindow` (stable API) rather
-/// than a child webview. This command is deliberately NOT async: tauri runs
-/// sync commands on the main thread, and creating a WebView2 instance off the
-/// main thread fails with 0x8007139F on Windows (the earlier blank-window
-/// root cause).
-#[tauri::command]
-pub fn cloud_drive_baidu_open(
-    app: AppHandle,
-    bounds: WebviewBounds,
-) -> Result<(), AppError> {
-    *CLOUD_BOUNDS.lock().unwrap() = Some(bounds);
-    spawn_url_probe(app.clone());
-    let (pos, size) = screen_geometry_from_bounds(&app, bounds)
-        .unwrap_or((tauri::LogicalPosition::new(bounds.x, bounds.y), tauri::LogicalSize::new(bounds.width, bounds.height)));
-
-    if let Some(win) = app.get_webview_window(WEBVIEW_LABEL) {
-        let _ = win.set_position(pos);
-        let _ = win.set_size(size);
-        let _ = win.show();
-        let _ = win.set_focus();
-        match win.url() {
-            Ok(url) => {
-                log::info!("cloud-drive: reopening window at {}", url);
-                if url.scheme() == "about" || url.as_str() == "about:blank" {
-                    let _ = win.reload();
-                }
-                return Ok(());
-            }
-            Err(e) => {
-                // Renderer is unresponsive (IPC to the webview failed). Reloading
-                // a wedged WebView2 process is unreliable, so destroy the window
-                // and recreate it below for a clean WebView2 process.
-                log::warn!("cloud-drive: window unresponsive ({e}), destroying and recreating");
-                let _ = win.destroy();
-                std::thread::sleep(std::time::Duration::from_millis(300));
-            }
-        }
-    }
-
-    // Standard Edge/Chrome UA so Baidu serves the full page (WebView2's default
-    // UA can trigger a compatibility downgrade / blank render on some pan pages).
-    //
-    // Give the overlay window its own WebView2 user data folder (independent
-    // browser process): sharing the main window's folder has failed with
-    // 0x8007139F / hangs when creating a second WebView2 instance.
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map(|d| d.join("baidu-webview"))
-        .ok();
-    if let Some(dir) = &data_dir {
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            log::warn!("cloud-drive: create data dir failed ({e})");
-        }
-    }
-    let mut builder = tauri::WebviewWindowBuilder::new(&app, WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
-        .user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
-        )
-        .initialization_script(INJECT_SCRIPT)
-        .position(pos.x, pos.y)
-        .inner_size(size.width, size.height)
-        .decorations(false)
-        .skip_taskbar(true)
-        .shadow(false)
-        .resizable(false);
-    if let Some(dir) = data_dir {
-        builder = builder.data_directory(dir);
-    }
-    let win = builder
-        .build()
-        .map_err(|e| AppError::CloudDrive(format!("创建网盘窗口失败: {e}")))?;
-    let _ = win.set_focus();
-    if let Ok(url) = win.url() {
-        log::info!("cloud-drive: created window, url={url}");
-    }
-    Ok(())
-}
-
-/// Log the overlay window's URL every 2s for ~10s after open, so a blank page
-/// can be traced to which URL the webview actually landed on (pan home page,
-/// passport login redirect, or nothing at all).
-fn spawn_url_probe(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        for i in 0..5 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            match app.get_webview_window(WEBVIEW_LABEL) {
-                Some(win) => match win.url() {
-                    Ok(url) => log::info!("cloud-drive: url probe #{i} -> {url}"),
-                    Err(e) => log::warn!("cloud-drive: url probe #{i} unavailable ({e})"),
-                },
-                None => {
-                    log::warn!("cloud-drive: url probe #{i} window gone");
-                    return;
-                }
-            }
-        }
-    });
-}
-
-/// Update the overlay window's bounds (called on window/content resize).
-#[tauri::command]
-pub fn cloud_drive_baidu_resize(
-    app: AppHandle,
-    bounds: WebviewBounds,
-) -> Result<(), AppError> {
-    *CLOUD_BOUNDS.lock().unwrap() = Some(bounds);
-    if let Some(win) = app.get_webview_window(WEBVIEW_LABEL) {
-        if let Some((pos, size)) = screen_geometry_from_bounds(&app, bounds) {
-            let _ = win.set_position(pos);
-            let _ = win.set_size(size);
-        }
-    }
-    Ok(())
-}
-
-/// Hide the overlay window and tell the frontend to restore its own view.
-#[tauri::command]
-pub fn cloud_drive_baidu_close(app: AppHandle) -> Result<(), AppError> {
-    if let Some(win) = app.get_webview_window(WEBVIEW_LABEL) {
-        let _ = win.hide();
-    }
-    let _ = app.emit("cloud-drive:hidden", ());
-    Ok(())
-}
-
 /// Full-screen navigation mode: navigate the MAIN window's webview (the same
-/// one that renders the app UI) to the Baidu Netdisk page, then keep re-injecting
-/// the nav control script until the page is ready. Reuses the main webview, so
-/// no second WebView2 instance is created (avoids 0x8007139F entirely).
+/// one that renders the app UI) to the Baidu Netdisk page, then keep
+/// re-injecting the nav control script until the page is ready. Reuses the
+/// main webview, so no second WebView2 instance is created (creating a second
+/// instance fails/hangs the main thread on some machines).
 #[tauri::command]
 pub fn cloud_drive_baidu_nav_open(
     app: AppHandle,
@@ -276,9 +84,25 @@ pub fn cloud_drive_baidu_nav_open(
     Ok(())
 }
 
-/// Re-inject the nav control script (back / minimize / close buttons) into the
-/// main window until it sticks, in case the page is still loading or the
-/// config-level initializationScript was not applied.
+/// Navigate the main webview back to the app (tauri://localhost). Called by
+/// the injected "返回 Rayburst" button on the Baidu page.
+#[tauri::command]
+pub fn cloud_drive_nav_back(app: AppHandle) -> Result<(), AppError> {
+    let main = app
+        .get_webview("main")
+        .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?;
+    let back = "tauri://localhost"
+        .parse::<tauri::Url>()
+        .map_err(|e| AppError::CloudDrive(format!("URL 解析失败: {e}")))?;
+    log::info!("cloud-drive: navigating main webview back to app");
+    main.navigate(back)
+        .map_err(|e| AppError::CloudDrive(format!("返回失败: {e}")))?;
+    Ok(())
+}
+
+/// Re-inject the bridge script (download + back button) into the main window
+/// until it sticks, in case the page is still loading or the config-level
+/// initializationScript was not applied.
 fn spawn_nav_injector(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         for i in 0..15 {
@@ -286,27 +110,10 @@ fn spawn_nav_injector(app: AppHandle) {
             let Some(main) = app.get_webview("main") else {
                 return;
             };
-            let _ = main.eval(NAV_SCRIPT);
+            let _ = main.eval(INJECT_SCRIPT);
             log::debug!("cloud-drive: nav injector pass #{i}");
         }
     });
-}
-
-/// Minimize the main window (called by the injected button on the Baidu page).
-#[tauri::command]
-pub fn cloud_drive_nav_minimize(app: AppHandle) -> Result<(), AppError> {
-    app.get_window("main")
-        .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?
-        .minimize()
-        .map_err(|e| AppError::CloudDrive(format!("最小化失败: {e}")))?;
-    Ok(())
-}
-
-/// Quit the app (called by the injected close button on the Baidu page).
-#[tauri::command]
-pub fn cloud_drive_nav_close(app: AppHandle) -> Result<(), AppError> {
-    app.exit(0);
-    Ok(())
 }
 
 /// Download checked files: cookie -> token -> dlink -> aria2.

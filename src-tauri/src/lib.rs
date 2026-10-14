@@ -241,7 +241,6 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     );
     native_messaging::schedule_repair(app.handle());
     commands::protocol::repair_activation_protocol(app.handle());
-    commands::cloud_drive::init_main_window_sync(app.handle());
     #[cfg(target_os = "macos")]
     {
         let m = menu::build_menu(handle)?;
@@ -780,13 +779,9 @@ pub fn run() {
             commands::aria2_resume_eligible,
             commands::system_shutdown,
             commands::cancel_shutdown,
-            commands::cloud_drive_baidu_open,
-            commands::cloud_drive_baidu_resize,
-            commands::cloud_drive_baidu_close,
             commands::cloud_drive_baidu_download,
             commands::cloud_drive_baidu_nav_open,
-            commands::cloud_drive_nav_minimize,
-            commands::cloud_drive_nav_close,
+            commands::cloud_drive_nav_back,
         ])
         // ── Window event interception ─────────────────────────────────
         //

@@ -2,70 +2,33 @@
 /**
  * Cloud drive (网盘) entry page.
  *
- * - Baidu Netdisk opens inside the app as an embedded child webview that
- *   fills the content area (see Rust `cloud_drive_baidu_open`).
+ * - Baidu Netdisk opens inside the main window's webview in full-screen
+ *   navigation mode (see Rust `cloud_drive_baidu_nav_open`); a "返回 Rayburst"
+ *   button and "下载到 Rayburst" support are injected into the Baidu page.
  * - Quark / 115 open their web versions in the default browser.
  */
-import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NIcon } from 'naive-ui'
-import { CloudOutline, AlbumsOutline, FolderOpenOutline, ChevronBackOutline, EarthOutline } from '@vicons/ionicons5'
+import { CloudOutline, AlbumsOutline, FolderOpenOutline, ChevronBackOutline } from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { useAppMessage } from '@/composables/useAppMessage'
 
-interface WebviewBounds {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
 const { t } = useI18n()
 const message = useAppMessage()
-const rootRef = ref<HTMLElement | null>(null)
-const viewing = ref(false)
-const opening = ref(false)
-let unlistenHidden: UnlistenFn | null = null
 
-function measure(): WebviewBounds | null {
-  const el = rootRef.value
-  if (!el) return null
-  const rect = el.getBoundingClientRect()
-  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-}
-
-const OPEN_TIMEOUT_MS = 8000
+const PAN_MAIN_URL = 'https://pan.baidu.com/disk/main'
 
 async function openBaidu() {
-  if (opening.value) return
-  const bounds = measure()
-  if (!bounds) return
-  opening.value = true
+  // Full-screen navigation mode: reuse the MAIN window's webview by navigating
+  // the whole app page to Baidu Netdisk. Rust drives the navigation and keeps
+  // injecting the bridge script (download + back button).
   try {
-    // Race with a timeout so a hung backend invoke can never leave the button
-    // permanently disabled (previously the second click did nothing).
-    await Promise.race([
-      invoke('cloud_drive_baidu_open', { bounds }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('打开网盘超时（8 秒）')), OPEN_TIMEOUT_MS)),
-    ])
-    viewing.value = true
+    await invoke('cloud_drive_baidu_nav_open', { url: PAN_MAIN_URL })
   } catch (err) {
-    console.error('cloud-drive: open baidu failed', err)
+    console.error('cloud-drive: nav open failed', err)
     const msg = err instanceof Error ? err.message : String(err)
     message.error(msg || t('cloudDrive.openFailed'))
-  } finally {
-    opening.value = false
-  }
-}
-
-async function closeBaidu() {
-  viewing.value = false
-  try {
-    await invoke('cloud_drive_baidu_close')
-  } catch (err) {
-    console.error('cloud-drive: close baidu failed', err)
   }
 }
 
@@ -73,96 +36,49 @@ async function openQuark() {
   await openUrl('https://pan.quark.cn').catch((e) => console.error('cloud-drive: open quark failed', e))
 }
 
-async function openBaiduNav() {
-  // Full-screen navigation mode: reuse the MAIN window's webview by navigating
-  // the whole app page to Baidu Netdisk. Rust drives the navigation and keeps
-  // injecting the control buttons (back / minimize / close) via cloud-drive-nav.js.
-  try {
-    await invoke('cloud_drive_baidu_nav_open', { url: 'https://pan.baidu.com/disk/main' })
-  } catch (err) {
-    console.error('cloud-drive: nav open failed', err)
-    const msg = err instanceof Error ? err.message : String(err)
-    message.error(msg || t('cloudDrive.openFailed'))
-  }
-}
 async function open115() {
   await openUrl('https://115.com/').catch((e) => console.error('cloud-drive: open 115 failed', e))
 }
-
-function onResize() {
-  if (!viewing.value) return
-  const bounds = measure()
-  if (bounds) {
-    invoke('cloud_drive_baidu_resize', { bounds }).catch((e) => console.error('cloud-drive: resize failed', e))
-  }
-}
-
-onMounted(async () => {
-  window.addEventListener('resize', onResize)
-  unlistenHidden = await listen('cloud-drive:hidden', () => {
-    viewing.value = false
-  })
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', onResize)
-  unlistenHidden?.()
-  if (viewing.value) {
-    void closeBaidu()
-  }
-})
 </script>
 
 <template>
-  <div ref="rootRef" class="cloud-drive-page" :data-viewing="viewing">
-    <template v-if="!viewing">
-      <header class="cloud-drive-header">
-        <h2>{{ t('navigation.cloud-drive') }}</h2>
-        <p class="cloud-drive-hint">{{ t('cloudDrive.pageHint') }}</p>
-      </header>
+  <div class="cloud-drive-page">
+    <header class="cloud-drive-header">
+      <h2>{{ t('navigation.cloud-drive') }}</h2>
+      <p class="cloud-drive-hint">{{ t('cloudDrive.pageHint') }}</p>
+    </header>
 
-      <div class="cloud-drive-cards">
-        <button type="button" class="drive-card drive-card--baidu" :disabled="opening" @click="openBaidu">
-          <NIcon :size="34" aria-hidden="true"><CloudOutline /></NIcon>
-          <span class="drive-card__name">{{ t('cloudDrive.baidu') }}</span>
-          <span class="drive-card__desc">{{ t('cloudDrive.baiduDesc') }}</span>
-          <span class="drive-card__action">
-            <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
-            {{ t('cloudDrive.openInApp') }}
-          </span>
-        </button>
+    <div class="cloud-drive-cards">
+      <button type="button" class="drive-card drive-card--baidu" @click="openBaidu">
+        <NIcon :size="34" aria-hidden="true"><CloudOutline /></NIcon>
+        <span class="drive-card__name">{{ t('cloudDrive.baiduNav') }}</span>
+        <span class="drive-card__desc">{{ t('cloudDrive.baiduNavDesc') }}</span>
+        <span class="drive-card__action">
+          <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
+          {{ t('cloudDrive.openInPage') }}
+        </span>
+      </button>
 
-        <button type="button" class="drive-card drive-card--nav" @click="openBaiduNav">
-          <NIcon :size="34" aria-hidden="true"><EarthOutline /></NIcon>
-          <span class="drive-card__name">{{ t('cloudDrive.baiduNav') }}</span>
-          <span class="drive-card__desc">{{ t('cloudDrive.baiduNavDesc') }}</span>
-          <span class="drive-card__action">
-            <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
-            {{ t('cloudDrive.openInPage') }}
-          </span>
-        </button>
+      <button type="button" class="drive-card drive-card--quark" @click="openQuark">
+        <NIcon :size="34" aria-hidden="true"><AlbumsOutline /></NIcon>
+        <span class="drive-card__name">{{ t('cloudDrive.quark') }}</span>
+        <span class="drive-card__desc">{{ t('cloudDrive.quarkDesc') }}</span>
+        <span class="drive-card__action">
+          <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
+          {{ t('cloudDrive.openWeb') }}
+        </span>
+      </button>
 
-        <button type="button" class="drive-card drive-card--quark" @click="openQuark">
-          <NIcon :size="34" aria-hidden="true"><AlbumsOutline /></NIcon>
-          <span class="drive-card__name">{{ t('cloudDrive.quark') }}</span>
-          <span class="drive-card__desc">{{ t('cloudDrive.quarkDesc') }}</span>
-          <span class="drive-card__action">
-            <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
-            {{ t('cloudDrive.openWeb') }}
-          </span>
-        </button>
-
-        <button type="button" class="drive-card drive-card--115" @click="open115">
-          <NIcon :size="34" aria-hidden="true"><FolderOpenOutline /></NIcon>
-          <span class="drive-card__name">{{ t('cloudDrive.netdisk115') }}</span>
-          <span class="drive-card__desc">{{ t('cloudDrive.netdisk115Desc') }}</span>
-          <span class="drive-card__action">
-            <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
-            {{ t('cloudDrive.openWeb') }}
-          </span>
-        </button>
-      </div>
-    </template>
+      <button type="button" class="drive-card drive-card--115" @click="open115">
+        <NIcon :size="34" aria-hidden="true"><FolderOpenOutline /></NIcon>
+        <span class="drive-card__name">{{ t('cloudDrive.netdisk115') }}</span>
+        <span class="drive-card__desc">{{ t('cloudDrive.netdisk115Desc') }}</span>
+        <span class="drive-card__action">
+          <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
+          {{ t('cloudDrive.openWeb') }}
+        </span>
+      </button>
+    </div>
   </div>
 </template>
 
