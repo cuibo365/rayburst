@@ -155,9 +155,8 @@ pub async fn cloud_drive_baidu_open(
                 // and recreate it below for a clean WebView2 process.
                 log::warn!("cloud-drive: window unresponsive ({e}), destroying and recreating");
                 let _ = win.destroy();
-                tauri::async_runtime::sleep(std::time::Duration::from_millis(300)).await;
-            }
-        }
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }        }
     }
 
     // Standard Edge/Chrome UA so Baidu serves the full page (WebView2's default
@@ -188,7 +187,7 @@ pub async fn cloud_drive_baidu_open(
 fn spawn_url_probe(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         for i in 0..5 {
-            tauri::async_runtime::sleep(std::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             match app.get_webview_window(WEBVIEW_LABEL) {
                 Some(win) => match win.url() {
                     Ok(url) => log::info!("cloud-drive: url probe #{i} -> {url}"),
