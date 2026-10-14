@@ -15,8 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const PAN_URL: &str = "https://pan.baidu.com/disk/main";
 const WEBVIEW_LABEL: &str = "cloud-drive-baidu";
-const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const USER_AGENT: &str = "pan.baidu.com";
 /// Public client_id used by the Baidu Netdisk web app (same as LinkSwift).
 const BAIDU_CLIENT_ID: &str = "omiOnr2tYnN9vSyDErcVFWpPU2mZA7YO";
 const BAIDU_AUTHORIZE_URL: &str = "https://openapi.baidu.com/oauth/2.0/authorize";
