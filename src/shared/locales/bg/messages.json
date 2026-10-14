@@ -939,7 +939,8 @@
     "about": "Относно",
     "settings": "Настройки",
     "extensions": "Разширения"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "Изпращайте изтеглянията от браузъра към Rayburst и откривайте медия в уеб.",
     "install": "Инсталирайте официалното разширение за браузър",
@@ -948,5 +949,16 @@
     "media-preview": "Откривайте и преглеждайте медия в уеб",
     "browser-controls": "Управлявайте изтеглянията от браузъра",
     "download-packages": "Изтегляне на пакети"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

@@ -939,7 +939,8 @@
     "about": "정보",
     "settings": "설정",
     "extensions": "확장 프로그램"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "브라우저 다운로드를 Rayburst로 보내고 웹 미디어를 찾아보세요.",
     "install": "공식 브라우저 확장 프로그램 설치",
@@ -948,5 +949,16 @@
     "media-preview": "웹 미디어 검색 및 미리보기",
     "browser-controls": "브라우저에서 다운로드 관리",
     "download-packages": "패키지 다운로드"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

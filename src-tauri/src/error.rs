@@ -49,6 +49,9 @@ pub enum AppError {
     /// Database read/write error (rusqlite).
     #[error("Database error: {0}")]
     Database(String),
+    /// Cloud drive (网盘) login / open / download errors.
+    #[error("Cloud drive error: {0}")]
+    CloudDrive(String),
 }
 
 impl From<std::io::Error> for AppError {

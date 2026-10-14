@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-cloud-drive-baidu-download"
+description = "Enables the cloud_drive_baidu_download command from the embedded Baidu Netdisk webview."
+commands.allow = ["cloud_drive_baidu_download"]
+
+[[permission]]
+identifier = "allow-cloud-drive-baidu-close"
+description = "Enables the cloud_drive_baidu_close command from the embedded Baidu Netdisk webview."
+commands.allow = ["cloud_drive_baidu_close"]

@@ -779,6 +779,10 @@ pub fn run() {
             commands::aria2_resume_eligible,
             commands::system_shutdown,
             commands::cancel_shutdown,
+            commands::cloud_drive_baidu_open,
+            commands::cloud_drive_baidu_resize,
+            commands::cloud_drive_baidu_close,
+            commands::cloud_drive_baidu_download,
         ])
         // ── Window event interception ─────────────────────────────────
         //

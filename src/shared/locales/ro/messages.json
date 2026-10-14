@@ -939,7 +939,8 @@
     "about": "Despre",
     "settings": "Setări",
     "extensions": "Extensii"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "Trimite descărcările din browser către Rayburst și descoperă conținut media pe web.",
     "install": "Instalează extensia oficială de browser",
@@ -948,5 +949,16 @@
     "media-preview": "Găsește și previzualizează conținut media web",
     "browser-controls": "Gestionează descărcările din browser",
     "download-packages": "Descarcă pachetele"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

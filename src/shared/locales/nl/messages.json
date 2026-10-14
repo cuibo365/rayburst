@@ -939,7 +939,8 @@
     "about": "Over",
     "settings": "Instellingen",
     "extensions": "Extensies"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "Stuur browserdownloads naar Rayburst en ontdek media op het web.",
     "install": "Installeer de officiële browserextensie",
@@ -948,5 +949,16 @@
     "media-preview": "Vind en bekijk webmedia",
     "browser-controls": "Beheer downloads vanuit je browser",
     "download-packages": "Pakketten downloaden"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

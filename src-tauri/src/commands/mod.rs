@@ -1,5 +1,6 @@
 pub mod aria2;
 pub mod bt_blocklist;
+pub mod cloud_drive;
 pub mod config;
 pub mod database;
 pub mod ed2k;
@@ -24,6 +25,7 @@ pub mod upnp;
 
 pub use aria2::*;
 pub use bt_blocklist::*;
+pub use cloud_drive::*;
 pub use config::*;
 pub use database::*;
 pub use ed2k::*;

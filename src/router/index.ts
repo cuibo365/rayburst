@@ -19,6 +19,11 @@ const router = createRouter({
           props: true,
         },
         {
+          path: '/cloud-drive',
+          name: 'cloud-drive',
+          component: () => import('@/views/CloudDriveView.vue'),
+        },
+        {
           path: '/preference',
           name: 'preference',
           component: () => import('@/views/PreferenceView.vue'),

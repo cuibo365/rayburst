@@ -5,7 +5,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import MTooltip from '@/components/common/MTooltip.vue'
 import { NIcon } from 'naive-ui'
-import { ExtensionPuzzleOutline, InformationCircleOutline, SettingsOutline } from '@vicons/ionicons5'
+import { CloudOutline, ExtensionPuzzleOutline, InformationCircleOutline, SettingsOutline } from '@vicons/ionicons5'
 import { useTaskStore } from '@/stores/task'
 import { usePreferenceStore } from '@/stores/preference'
 import SidebarCount from './SidebarCount.vue'
@@ -20,6 +20,7 @@ const taskDestinations = useTaskDestinations()
 const tasks = useTaskStore()
 const preferences = usePreferenceStore()
 const isSettings = computed(() => route.matched.some((record) => record.name === 'preference'))
+const isCloudDrive = computed(() => route.name === 'cloud-drive')
 </script>
 
 <template>
@@ -50,6 +51,21 @@ const isSettings = computed(() => route.matched.some((record) => record.name ===
       </MTooltip>
     </div>
     <div class="sidebar-bottom">
+      <MTooltip placement="right" :disabled="!compact">
+        <template #trigger>
+          <RouterLink
+            :to="{ name: 'cloud-drive' }"
+            class="sidebar-item"
+            :class="{ active: isCloudDrive }"
+            :aria-label="t('navigation.cloud-drive')"
+            :aria-current="isCloudDrive ? 'page' : undefined"
+          >
+            <NIcon :size="18" aria-hidden="true"><CloudOutline /></NIcon>
+            <span class="sidebar-label">{{ t('navigation.cloud-drive') }}</span>
+          </RouterLink>
+        </template>
+        {{ t('navigation.cloud-drive') }}
+      </MTooltip>
       <MTooltip placement="right" :disabled="!compact">
         <template #trigger>
           <RouterLink

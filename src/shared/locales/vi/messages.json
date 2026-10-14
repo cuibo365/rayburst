@@ -939,7 +939,8 @@
     "about": "Giới thiệu",
     "settings": "Cài đặt",
     "extensions": "Tiện ích"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "Gửi các lượt tải từ trình duyệt đến Rayburst và khám phá nội dung đa phương tiện trên web.",
     "install": "Cài đặt tiện ích trình duyệt chính thức",
@@ -948,5 +949,16 @@
     "media-preview": "Tìm và xem trước nội dung đa phương tiện trên web",
     "browser-controls": "Quản lý lượt tải từ trình duyệt",
     "download-packages": "Tải gói cài đặt"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

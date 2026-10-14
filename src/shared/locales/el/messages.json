@@ -939,7 +939,8 @@
     "about": "Σχετικά",
     "settings": "Ρυθμίσεις",
     "extensions": "Επεκτάσεις"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "Στείλτε τις λήψεις του προγράμματος περιήγησης στο Rayburst και ανακαλύψτε πολυμέσα στον ιστό.",
     "install": "Εγκαταστήστε την επίσημη επέκταση του προγράμματος περιήγησης",
@@ -948,5 +949,16 @@
     "media-preview": "Εύρεση και προεπισκόπηση πολυμέσων ιστού",
     "browser-controls": "Διαχείριση λήψεων από το πρόγραμμα περιήγησης",
     "download-packages": "Λήψη πακέτων"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

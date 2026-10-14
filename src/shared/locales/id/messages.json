@@ -939,7 +939,8 @@
     "about": "Tentang",
     "settings": "Pengaturan",
     "extensions": "Ekstensi"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "Kirim unduhan browser ke Rayburst dan temukan media web.",
     "install": "Pasang ekstensi browser resmi",
@@ -948,5 +949,16 @@
     "media-preview": "Temukan dan pratinjau media web",
     "browser-controls": "Kelola unduhan dari browser",
     "download-packages": "Unduh paket"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

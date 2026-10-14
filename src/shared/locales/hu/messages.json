@@ -939,7 +939,8 @@
     "about": "Névjegy",
     "settings": "Beállítások",
     "extensions": "Bővítmények"
-  },
+  ,
+    "cloud-drive": "Cloud Drive"},
   "extension": {
     "description": "Küldje a böngésző letöltéseit a Rayburst alkalmazásba, és fedezzen fel médiatartalmakat a weben.",
     "install": "A hivatalos böngészőbővítmény telepítése",
@@ -948,5 +949,16 @@
     "media-preview": "Webes média keresése és előnézete",
     "browser-controls": "Letöltések kezelése a böngészőből",
     "download-packages": "Csomagok letöltése"
+  },
+  "cloudDrive": {
+    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
+    "baidu": "Baidu Netdisk",
+    "quark": "Quark Netdisk",
+    "netdisk115": "115 Netdisk",
+    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
+    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
+    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
+    "openInApp": "Open in app",
+    "openWeb": "Open web version"
   }
 }

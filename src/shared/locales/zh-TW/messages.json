@@ -939,7 +939,8 @@
     "about": "關於",
     "settings": "設定",
     "extensions": "擴充功能"
-  },
+  ,
+    "cloud-drive": "網盤"},
   "extension": {
     "description": "接管下載，探索網頁媒體。",
     "install": "安裝官方瀏覽器擴充功能",
@@ -948,5 +949,16 @@
     "media-preview": "探索並預覽網頁媒體",
     "browser-controls": "在瀏覽器中管理下載",
     "download-packages": "下載安裝套件"
+  },
+  "cloudDrive": {
+    "pageHint": "選擇網盤服務，百度網盤可直接在應用內瀏覽與下載檔案",
+    "baidu": "百度網盤",
+    "quark": "夸克網盤",
+    "netdisk115": "115網盤",
+    "baiduDesc": "在應用內開啟百度網盤網頁版，勾選檔案即可下載到 Rayburst",
+    "quarkDesc": "在預設瀏覽器中開啟夸克網盤網頁版",
+    "netdisk115Desc": "在預設瀏覽器中開啟 115 網盤網頁版",
+    "openInApp": "在應用內開啟",
+    "openWeb": "開啟網頁版"
   }
 }
