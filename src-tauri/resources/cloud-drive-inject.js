@@ -15,12 +15,25 @@
   'use strict';
 
   if (window.location.hostname !== 'pan.baidu.com' || !/^\/disk\//.test(window.location.pathname)) {
+    // Not on the disk page yet (e.g. still on the login redirect). Do NOT set
+    // the init flag, so later re-injections retry and can still start the loop.
     return;
   }
+
+  // Idempotent: the same script is re-injected periodically (config-level
+  // initializationScript + repeated eval from Rust). Only the first run wires
+  // up the watch loop; later evals just re-mount any missing buttons.
+  if (window.__rayburstBridge) {
+    mountBaiduButtons();
+    return;
+  }
+  window.__rayburstBridge = true;
 
   var api = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
   if (!api) {
     console.warn('[rayburst] Tauri bridge unavailable in this webview; download button disabled.');
+    // Clear the init flag so a later re-injection can retry full init.
+    window.__rayburstBridge = false;
     return;
   }
 
@@ -184,7 +197,7 @@
     btn.textContent = '返回 Rayburst';
     btn.setAttribute('title', '退出网盘浏览，返回 Rayburst 主界面');
     btn.style.cssText =
-      'position:fixed;right:18px;top:14px;z-index:2147483646;' +
+      'position:fixed;right:16px;bottom:16px;z-index:2147483646;' +
       'padding:6px 14px;border-radius:16px;font-size:12px;color:#fff;cursor:pointer;' +
       'background:rgba(24,24,24,.85);border:1px solid rgba(255,255,255,.25);' +
       'box-shadow:0 2px 8px rgba(0,0,0,.3);user-select:none;';
@@ -196,16 +209,22 @@
     document.body.appendChild(btn);
   }
 
-  // Mount on the initial page and re-mount after SPA route changes
-  // (the toolbar is rebuilt when the user navigates between folders).
-  var lastPath = window.location.pathname;
-  setInterval(function () {
-    if (window.location.pathname !== lastPath) {
-      lastPath = window.location.pathname;
-      mountToolbarButton();
+  // (Re)mount any missing buttons. Called on every watch tick and on every
+  // re-injection, so buttons survive Baidu page reloads / login redirects.
+  function mountBaiduButtons() {
+    if (window.location.hostname !== 'pan.baidu.com' || !/^\/disk\//.test(window.location.pathname)) {
+      return;
     }
-  }, 800);
+    var b = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+    if (!b) {
+      return;
+    }
+    mountToolbarButton();
+    mountFloatingBack();
+  }
 
-  mountToolbarButton();
-  mountFloatingBack();
+  // Watch loop: keep the buttons alive across SPA navigation and reloads.
+  setInterval(mountBaiduButtons, 800);
+
+  mountBaiduButtons();
 })();

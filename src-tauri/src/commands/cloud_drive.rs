@@ -105,7 +105,10 @@ pub fn cloud_drive_nav_back(app: AppHandle) -> Result<(), AppError> {
 /// initializationScript was not applied.
 fn spawn_nav_injector(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        for i in 0..15 {
+        // 25 passes x 800ms ≈ 20s window, long enough for a slow load / login
+        // redirect to land on pan.baidu.com/disk/*. The script is idempotent,
+        // so repeated evals only re-mount missing buttons.
+        for i in 0..25 {
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             let Some(main) = app.get_webview("main") else {
                 return;
