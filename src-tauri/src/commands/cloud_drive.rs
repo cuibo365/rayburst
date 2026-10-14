@@ -168,7 +168,21 @@ pub fn cloud_drive_baidu_open(
 
     // Standard Edge/Chrome UA so Baidu serves the full page (WebView2's default
     // UA can trigger a compatibility downgrade / blank render on some pan pages).
-    let win = tauri::WebviewWindowBuilder::new(&app, WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
+    //
+    // Give the overlay window its own WebView2 user data folder (independent
+    // browser process): sharing the main window's folder has failed with
+    // 0x8007139F / hangs when creating a second WebView2 instance.
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map(|d| d.join("baidu-webview"))
+        .ok();
+    if let Some(dir) = &data_dir {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            log::warn!("cloud-drive: create data dir failed ({e})");
+        }
+    }
+    let mut builder = tauri::WebviewWindowBuilder::new(&app, WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
         .user_agent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
         )
@@ -178,7 +192,11 @@ pub fn cloud_drive_baidu_open(
         .decorations(false)
         .skip_taskbar(true)
         .shadow(false)
-        .resizable(false)
+        .resizable(false);
+    if let Some(dir) = data_dir {
+        builder = builder.data_directory(dir);
+    }
+    let win = builder
         .build()
         .map_err(|e| AppError::CloudDrive(format!("创建网盘窗口失败: {e}")))?;
     let _ = win.set_focus();
