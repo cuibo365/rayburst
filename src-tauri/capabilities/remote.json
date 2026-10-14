@@ -3,7 +3,7 @@
   "identifier": "remote-cloud-drive",
   "description": "Allow the embedded Baidu Netdisk webview to invoke cloud-drive commands",
   "remote": {
-    "urls": ["https://pan.baidu.com"]
+    "urls": ["https://*.baidu.com", "https://baidu.com"]
   },
   "local": false,
   "permissions": [

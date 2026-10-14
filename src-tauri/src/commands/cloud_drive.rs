@@ -83,13 +83,31 @@ pub async fn cloud_drive_baidu_open(
         let _ = webview.set_size(tauri::LogicalSize::new(bounds.width, bounds.height));
         let _ = webview.show();
         let _ = webview.set_focus();
+        // Revive a dead webview: if the current URL is blank/unavailable, reload.
+        match webview.url() {
+            Ok(url) => {
+                log::info!("cloud-drive: reopening webview at {}", url);
+                if url.scheme() == "about" || url.as_str() == "about:blank" {
+                    let _ = webview.reload();
+                }
+            }
+            Err(e) => {
+                log::warn!("cloud-drive: webview url unavailable ({e}), reloading");
+                let _ = webview.reload();
+            }
+        }
         return Ok(());
     }
 
     let window = app
         .get_window("main")
         .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?;
+    // Standard Edge/Chrome UA so Baidu serves the full page (WebView2's default
+    // UA can trigger a compatibility downgrade / blank render on some pan pages).
     let builder = tauri::webview::WebviewBuilder::new(WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+        )
         .initialization_script(INJECT_SCRIPT);
     let webview = window
         .add_child(
@@ -99,6 +117,9 @@ pub async fn cloud_drive_baidu_open(
         )
         .map_err(|e| AppError::CloudDrive(format!("创建网盘窗口失败: {e}")))?;
     let _ = webview.set_focus();
+    if let Ok(url) = webview.url() {
+        log::info!("cloud-drive: created webview, url={url}");
+    }
     Ok(())
 }
 

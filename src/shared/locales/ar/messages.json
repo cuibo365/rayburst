@@ -938,9 +938,9 @@
   "navigation": {
     "about": "حول",
     "settings": "الإعدادات",
-    "extensions": "الإضافات"
-  ,
-    "cloud-drive": "Cloud Drive"},
+    "extensions": "الإضافات",
+    "cloud-drive": "Cloud Drive"
+  },
   "extension": {
     "description": "أرسل تنزيلات المتصفح إلى Rayburst واكتشف الوسائط على الويب.",
     "install": "ثبّت إضافة المتصفح الرسمية",
@@ -959,6 +959,7 @@
     "quarkDesc": "Open the Quark Netdisk web version in your default browser",
     "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
     "openInApp": "Open in app",
-    "openWeb": "Open web version"
+    "openWeb": "Open web version",
+    "openFailed": "Failed to open the drive, please retry"
   }
 }

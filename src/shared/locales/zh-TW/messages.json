@@ -938,9 +938,9 @@
   "navigation": {
     "about": "關於",
     "settings": "設定",
-    "extensions": "擴充功能"
-  ,
-    "cloud-drive": "網盤"},
+    "extensions": "擴充功能",
+    "cloud-drive": "網盤"
+  },
   "extension": {
     "description": "接管下載，探索網頁媒體。",
     "install": "安裝官方瀏覽器擴充功能",
@@ -959,6 +959,7 @@
     "quarkDesc": "在預設瀏覽器中開啟夸克網盤網頁版",
     "netdisk115Desc": "在預設瀏覽器中開啟 115 網盤網頁版",
     "openInApp": "在應用內開啟",
-    "openWeb": "開啟網頁版"
+    "openWeb": "開啟網頁版",
+    "openFailed": "打開網盤失敗，請重試"
   }
 }

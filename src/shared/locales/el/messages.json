@@ -938,9 +938,9 @@
   "navigation": {
     "about": "Σχετικά",
     "settings": "Ρυθμίσεις",
-    "extensions": "Επεκτάσεις"
-  ,
-    "cloud-drive": "Cloud Drive"},
+    "extensions": "Επεκτάσεις",
+    "cloud-drive": "Cloud Drive"
+  },
   "extension": {
     "description": "Στείλτε τις λήψεις του προγράμματος περιήγησης στο Rayburst και ανακαλύψτε πολυμέσα στον ιστό.",
     "install": "Εγκαταστήστε την επίσημη επέκταση του προγράμματος περιήγησης",
@@ -959,6 +959,7 @@
     "quarkDesc": "Open the Quark Netdisk web version in your default browser",
     "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
     "openInApp": "Open in app",
-    "openWeb": "Open web version"
+    "openWeb": "Open web version",
+    "openFailed": "Failed to open the drive, please retry"
   }
 }

@@ -938,9 +938,9 @@
   "navigation": {
     "about": "O programie",
     "settings": "Ustawienia",
-    "extensions": "Rozszerzenia"
-  ,
-    "cloud-drive": "Cloud Drive"},
+    "extensions": "Rozszerzenia",
+    "cloud-drive": "Cloud Drive"
+  },
   "extension": {
     "description": "Przesyłaj pobieranie z przeglądarki do Rayburst i odkrywaj multimedia w sieci.",
     "install": "Zainstaluj oficjalne rozszerzenie przeglądarki",
@@ -959,6 +959,7 @@
     "quarkDesc": "Open the Quark Netdisk web version in your default browser",
     "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
     "openInApp": "Open in app",
-    "openWeb": "Open web version"
+    "openWeb": "Open web version",
+    "openFailed": "Failed to open the drive, please retry"
   }
 }

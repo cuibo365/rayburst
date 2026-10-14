@@ -938,9 +938,9 @@
   "navigation": {
     "about": "Despre",
     "settings": "Setări",
-    "extensions": "Extensii"
-  ,
-    "cloud-drive": "Cloud Drive"},
+    "extensions": "Extensii",
+    "cloud-drive": "Cloud Drive"
+  },
   "extension": {
     "description": "Trimite descărcările din browser către Rayburst și descoperă conținut media pe web.",
     "install": "Instalează extensia oficială de browser",
@@ -959,6 +959,7 @@
     "quarkDesc": "Open the Quark Netdisk web version in your default browser",
     "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
     "openInApp": "Open in app",
-    "openWeb": "Open web version"
+    "openWeb": "Open web version",
+    "openFailed": "Failed to open the drive, please retry"
   }
 }

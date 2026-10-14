@@ -13,6 +13,7 @@ import { CloudOutline, AlbumsOutline, FolderOpenOutline, ChevronBackOutline } fr
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { useAppMessage } from '@/composables/useAppMessage'
 
 interface WebviewBounds {
   x: number
@@ -22,6 +23,7 @@ interface WebviewBounds {
 }
 
 const { t } = useI18n()
+const message = useAppMessage()
 const rootRef = ref<HTMLElement | null>(null)
 const viewing = ref(false)
 const opening = ref(false)
@@ -34,16 +36,25 @@ function measure(): WebviewBounds | null {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
 }
 
+const OPEN_TIMEOUT_MS = 8000
+
 async function openBaidu() {
   if (opening.value) return
   const bounds = measure()
   if (!bounds) return
   opening.value = true
   try {
-    await invoke('cloud_drive_baidu_open', { bounds })
+    // Race with a timeout so a hung backend invoke can never leave the button
+    // permanently disabled (previously the second click did nothing).
+    await Promise.race([
+      invoke('cloud_drive_baidu_open', { bounds }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('打开网盘超时（8 秒）')), OPEN_TIMEOUT_MS)),
+    ])
     viewing.value = true
   } catch (err) {
     console.error('cloud-drive: open baidu failed', err)
+    const msg = err instanceof Error ? err.message : String(err)
+    message.error(msg || t('cloudDrive.openFailed'))
   } finally {
     opening.value = false
   }

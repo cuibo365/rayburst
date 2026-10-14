@@ -938,9 +938,9 @@
   "navigation": {
     "about": "เกี่ยวกับ",
     "settings": "การตั้งค่า",
-    "extensions": "ส่วนขยาย"
-  ,
-    "cloud-drive": "Cloud Drive"},
+    "extensions": "ส่วนขยาย",
+    "cloud-drive": "Cloud Drive"
+  },
   "extension": {
     "description": "ส่งการดาวน์โหลดจากเบราว์เซอร์ไปยัง Rayburst และค้นหาสื่อบนเว็บ",
     "install": "ติดตั้งส่วนขยายเบราว์เซอร์อย่างเป็นทางการ",
@@ -959,6 +959,7 @@
     "quarkDesc": "Open the Quark Netdisk web version in your default browser",
     "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
     "openInApp": "Open in app",
-    "openWeb": "Open web version"
+    "openWeb": "Open web version",
+    "openFailed": "Failed to open the drive, please retry"
   }
 }
