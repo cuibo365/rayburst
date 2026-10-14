@@ -8,6 +8,7 @@
   "local": false,
   "permissions": [
     "allow-cloud-drive-baidu-download",
-    "allow-cloud-drive-baidu-close"
+    "allow-cloud-drive-baidu-close",
+    "allow-cloud-drive-nav-control"
   ]
 }

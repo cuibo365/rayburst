@@ -73,11 +73,17 @@ async function openQuark() {
   await openUrl('https://pan.quark.cn').catch((e) => console.error('cloud-drive: open quark failed', e))
 }
 
-function openBaiduNav() {
+async function openBaiduNav() {
   // Full-screen navigation mode: reuse the MAIN window's webview by navigating
-  // the whole app page to Baidu Netdisk. The back button is injected by
-  // cloud-drive-nav.js (tauri.conf.json initializationScript).
-  window.location.href = 'https://pan.baidu.com/disk/main'
+  // the whole app page to Baidu Netdisk. Rust drives the navigation and keeps
+  // injecting the control buttons (back / minimize / close) via cloud-drive-nav.js.
+  try {
+    await invoke('cloud_drive_baidu_nav_open', { url: 'https://pan.baidu.com/disk/main' })
+  } catch (err) {
+    console.error('cloud-drive: nav open failed', err)
+    const msg = err instanceof Error ? err.message : String(err)
+    message.error(msg || t('cloudDrive.openFailed'))
+  }
 }
 async function open115() {
   await openUrl('https://115.com/').catch((e) => console.error('cloud-drive: open 115 failed', e))
