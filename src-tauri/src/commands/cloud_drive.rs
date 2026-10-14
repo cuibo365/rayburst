@@ -84,7 +84,7 @@ pub async fn cloud_drive_baidu_open(
     let window = app
         .get_window("main")
         .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?;
-    let builder = tauri::WebviewBuilder::new(WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
+    let builder = tauri::webview::WebviewBuilder::new(WEBVIEW_LABEL, tauri::WebviewUrl::External(pan_url()?))
         .initialization_script(INJECT_SCRIPT);
     let webview = window
         .add_child(
