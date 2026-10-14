@@ -124,6 +124,7 @@ pub async fn cloud_drive_baidu_close(app: AppHandle) -> Result<(), AppError> {
 pub async fn cloud_drive_baidu_download(
     app: AppHandle,
     files: Vec<CloudDriveFile>,
+    current_dir: Option<String>,
 ) -> Result<CloudDriveResult, AppError> {
     if files.is_empty() {
         return Err(AppError::CloudDrive("没有选择文件".into()));
@@ -133,16 +134,37 @@ pub async fn cloud_drive_baidu_download(
     let token = exchange_access_token(&bduss).await?;
     let links = fetch_dlinks(&token, &files).await?;
 
+    // Rayburst's configured default download directory (config.json -> preferences.dir).
+    let default_dir: Option<String> = app
+        .store("config.json")
+        .ok()
+        .and_then(|store| store.get("preferences"))
+        .and_then(|prefs| {
+            prefs
+                .get("dir")?
+                .as_str()
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .filter(|dir| !dir.is_empty());
+
     let mut added = 0usize;
     let mut failed = 0usize;
     for (file, dlink) in &links {
-        let options = serde_json::json!({
+        let mut options = serde_json::json!({
             "header": [
                 format!("User-Agent: {USER_AGENT}"),
                 format!("Referer: {PAN_REFERER}"),
             ],
             "out": file.name,
         });
+        // dir = default download dir + (file path minus the current browser folder path).
+        if let Some(dir) = default_dir
+            .as_deref()
+            .and_then(|base| resolve_download_dir(base, current_dir.as_deref(), &file.path))
+        {
+            options["dir"] = serde_json::Value::String(dir);
+        }
         match crate::services::downloads::submit(
             &app,
             crate::services::downloads::TaskInput::Uris(vec![dlink.clone()]),
@@ -169,6 +191,76 @@ pub async fn cloud_drive_baidu_download(
         added,
         failed,
     })
+}
+
+/// Compute the aria2 `dir` for a Baidu file:
+///   default download dir + (file path minus the current browser folder path)
+/// Returns `None` when there is no default dir, no current dir, or the file
+/// path does not live under the current folder (fall back to engine default).
+fn resolve_download_dir(
+    default_dir: &str,
+    current_dir: Option<&str>,
+    file_path: &str,
+) -> Option<String> {
+    let base = default_dir.trim();
+    if base.is_empty() {
+        return None;
+    }
+    let cur = current_dir.map(str::trim).filter(|s| !s.is_empty())?;
+    let fp = file_path.trim_start_matches('/');
+    let rest = fp.strip_prefix(cur.trim_end_matches('/').trim_start_matches('/'))?;
+    let rel = rest.trim_start_matches('/');
+    let joined = if rel.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}/{}", base.trim_end_matches(['/', '\\']), rel)
+    };
+    Some(sanitize_dir_path(&joined))
+}
+
+/// Sanitize a joined download path:
+/// - collapse `//` -> `/` and `\\` -> `\`
+/// - normalize `\` -> `/` (aria2 accepts `D:/...` on Windows)
+/// - drop Windows-illegal chars `< > " | ? *` (and stray `:`), control chars,
+///   while keeping the drive-letter colon (`D:/`)
+/// - drop `.` / `..` segments so the result cannot escape the base dir
+fn sanitize_dir_path(raw: &str) -> String {
+    let mut s = raw.replace("\\\\", "\\");
+    while s.contains("\\\\") {
+        s = s.replace("\\\\", "\\");
+    }
+    while s.contains("//") {
+        s = s.replace("//", "/");
+    }
+    s = s.replace('\\', "/");
+    while s.contains("//") {
+        s = s.replace("//", "/");
+    }
+
+    let keep_drive = (s.len() >= 2 && s.as_bytes()[1] == b':' && s.as_bytes()[0].is_ascii_alphabetic())
+        .then(|| s[..2].to_string());
+    let body = if let Some(drive) = &keep_drive {
+        &s[2..]
+    } else {
+        s.as_str()
+    };
+    let cleaned: String = body
+        .chars()
+        .filter(|c| !matches!(c, '<' | '>' | '"' | '|' | '?' | '*' | ':') && !c.is_control())
+        .collect();
+
+    let segments: Vec<&str> = cleaned
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != "." && *seg != "..")
+        .collect();
+
+    let mut out = String::new();
+    if let Some(drive) = &keep_drive {
+        out.push_str(drive);
+        out.push('/');
+    }
+    out.push_str(&segments.join("/"));
+    out
 }
 
 /// Read BDUSS from the (shared) WebView cookie store.

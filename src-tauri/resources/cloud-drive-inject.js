@@ -91,6 +91,34 @@
     return out;
   }
 
+  // The folder currently open in the browser (address bar `path` param, with
+  // Vue-store fallbacks). Used by the backend to mirror the Baidu folder
+  // structure under the default download directory.
+  function getCurrentDir() {
+    try {
+      var m = window.location.search.match(/[?&]path=([^&]*)/);
+      if (m && m[1]) return decodeURIComponent(m[1]);
+    } catch (e) { /* fall through to Vue store */ }
+    try {
+      var fileList = document.querySelector('.file-list');
+      if (fileList && fileList.__vue__) {
+        var cur =
+          fileList.__vue__.currentDir ||
+          fileList.__vue__.currentPath ||
+          (fileList.__vue__.$parent && fileList.__vue__.$parent.currentDir) ||
+          '';
+        if (cur) return cur;
+      }
+      var wpCore = document.querySelector('.wp-s-core-pan');
+      if (wpCore && wpCore.__vue__) {
+        var route = wpCore.__vue__.route;
+        if (route && route.query && route.query.path) return route.query.path;
+        if (wpCore.__vue__.currentDir) return wpCore.__vue__.currentDir;
+      }
+    } catch (e) { /* ignore */ }
+    return '';
+  }
+
   var toastTimer = null;
   function toast(message, isError) {
     var existing = document.querySelector('.rayburst-toast');
@@ -122,7 +150,7 @@
       return;
     }
     busy = true;
-    api('cloud_drive_baidu_download', { files: files })
+    api('cloud_drive_baidu_download', { files: files, current_dir: getCurrentDir() })
       .then(function (result) {
         toast(result && result.message ? result.message : '已添加 ' + files.length + ' 个文件到下载队列', false);
       })
