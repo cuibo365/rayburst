@@ -61,7 +61,7 @@ fn screen_geometry_from_bounds(
 }
 
 /// Register main-window move/resize listeners so the netdisk overlay window
-/// follows the main window (and hides when the main window is minimized).
+/// follows the main window.
 pub fn init_main_window_sync(app: &tauri::AppHandle) {
     let Some(main) = app.get_window("main") else {
         return;
@@ -81,9 +81,6 @@ pub fn init_main_window_sync(app: &tauri::AppHandle) {
                         let _ = win.set_size(size);
                     }
                 }
-            }
-            tauri::WindowEvent::Minimized(_) => {
-                let _ = win.hide();
             }
             _ => {}
         }
