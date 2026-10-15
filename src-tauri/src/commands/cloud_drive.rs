@@ -425,7 +425,13 @@ async fn fetch_dlinks(
             let Some(fs_id) = item["fs_id"].as_u64() else { continue };
             let Some(dlink) = item["dlink"].as_str() else { continue };
             if let Some(file) = files.iter().find(|f| f.fs_id == fs_id) {
-                result.push((file.clone(), dlink.to_string()));
+                // Baidu 403 防护：dlink 必须附带 access_token 才放行（不带则直接 403）。
+                let dlink = if dlink.contains("access_token=") {
+                    dlink.to_string()
+                } else {
+                    format!("{dlink}&access_token={token}")
+                };
+                result.push((file.clone(), dlink));
             }
         }
     }
