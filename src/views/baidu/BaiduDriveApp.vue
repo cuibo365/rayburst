@@ -67,8 +67,20 @@ function stopPoll() {
   }
 }
 
+function errMsg(e: unknown): string {
+  if (e instanceof Error) return e.message || '操作失败'
+  if (typeof e === 'string' && e) return e
+  if (e && typeof e === 'object') {
+    const m = (e as Record<string, unknown>).message
+    if (typeof m === 'string' && m) return m
+  }
+  return '操作失败，请查看日志'
+}
+
+let polling = false
 async function pollOnce() {
-  if (!qr.value) return
+  if (polling || !qr.value) return
+  polling = true
   try {
     const st = await invoke<QrStatus>('cloud_drive_baidu_qrlogin', { sign: qr.value.sign })
     if (st.status === 'ok') {
@@ -82,6 +94,8 @@ async function pollOnce() {
     }
   } catch {
     // transient network error; keep polling
+  } finally {
+    polling = false
   }
 }
 
@@ -96,8 +110,7 @@ async function refreshQr() {
     qr.value = await invoke<QrData>('cloud_drive_baidu_qrcode')
     startPoll()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    message.error(msg || '获取二维码失败')
+    message.error(errMsg(err))
   }
 }
 
@@ -109,12 +122,12 @@ async function loadDir(dir: string) {
     selected.value = new Set()
     crumbPath.value = dir === '/' ? [] : dir.split('/').filter(Boolean)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errMsg(err)
     if (/未登录|登录/.test(msg)) {
       state.value = 'login'
       await refreshQr()
     } else {
-      message.error(msg || '加载目录失败')
+      message.error(msg)
     }
   } finally {
     loading.value = false
@@ -151,8 +164,7 @@ async function startDownload() {
     })) as { message?: string }
     message.success(r?.message || `已添加 ${list.length} 个文件到下载队列`)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    message.error(msg || '下载失败')
+    message.error(errMsg(err))
   } finally {
     downloading.value = false
   }

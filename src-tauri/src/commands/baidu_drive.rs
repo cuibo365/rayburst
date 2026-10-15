@@ -9,6 +9,7 @@ use crate::commands::cloud_drive::{http_client, CloudDriveFile};
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
 const PASSPORT_BASE: &str = "https://passport.baidu.com";
@@ -39,6 +40,38 @@ pub struct BaiduQrStatus {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bduss: Option<String>,
+}
+
+/// Session state captured when the QR code was requested: the gid/callback used
+/// in the unicast poll and the cookies Set-Cookie'ed by passport at that time.
+#[derive(Debug, Clone)]
+struct QrSession {
+    gid: String,
+    callback: String,
+    cookie: String,
+}
+
+static QR_SESSION: Mutex<Option<QrSession>> = Mutex::new(None);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Collect `Set-Cookie` header values into a single `name=value; name=value` string.
+fn collect_cookies(resp: &reqwest::Response) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for v in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(s) = v.to_str() {
+            if let Some((name, rest)) = s.split_once('=') {
+                let value = rest.split(';').next().unwrap_or("");
+                parts.push(format!("{name}={value}"));
+            }
+        }
+    }
+    parts.join("; ")
 }
 
 fn cred_path(app: &AppHandle) -> Result<PathBuf, AppError> {
@@ -78,31 +111,33 @@ fn clear_cred(app: &AppHandle) {
 
 /// Request a QR code for login. Returns the QR image URL and its sign token.
 #[tauri::command]
-pub async fn cloud_drive_baidu_qrcode(app: AppHandle) -> Result<BaiduQrcode, AppError> {
+pub async fn cloud_drive_baidu_qrcode(_app: AppHandle) -> Result<BaiduQrcode, AppError> {
     let client = http_client()?;
-    // `tpl=netdisk` scopes the QR code to the Netdisk product (same as the web app).
+    // Same request shape as the web app: gid/callback/tt/_ are browser-generated
+    // values; `tpl=netdisk` scopes the QR code to the Netdisk product.
+    let gid = uuid::Uuid::new_v4().to_string().to_uppercase();
+    let ts = now_ms();
+    let callback = format!("tangram_guid_{ts}");
     let url = format!(
-        "{PASSPORT_BASE}/v2/api/getqrcode?lp=pc&qrloginfrom=pc&apiver=v3&tpl=netdisk&subpro=netdisk_web"
+        "{PASSPORT_BASE}/v2/api/getqrcode?lp=pc&qrloginfrom=pc&gid={gid}&callback={callback}&apiver=v3&tt={ts}&tpl=netdisk&_={ts}"
     );
     let resp = client
         .get(&url)
         .send()
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求百度二维码失败: {e}")))?;
+    let cookie = collect_cookies(&resp);
     let text = resp
         .text()
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取二维码响应失败: {e}")))?;
-    log::debug!("cloud-drive: getqrcode resp (truncated): {}", &text[..text.len().min(300)]);
+    log::debug!("cloud-drive: getqrcode resp (truncated): {}", &text[..text.len().min(400)]);
 
+    // Flat shape: {"imgurl":"passport.baidu.com/v2/api/qrcode?sign=...","errno":0,"sign":"..."}
     #[derive(Deserialize)]
     struct Raw {
         #[serde(default)]
-        status: Option<i64>,
-        data: Option<RawData>,
-    }
-    #[derive(Deserialize)]
-    struct RawData {
+        errno: Option<i64>,
         #[serde(default)]
         imgurl: Option<String>,
         #[serde(default)]
@@ -112,105 +147,156 @@ pub async fn cloud_drive_baidu_qrcode(app: AppHandle) -> Result<BaiduQrcode, App
     }
     let raw: Raw = serde_json::from_str(&text)
         .map_err(|e| AppError::CloudDrive(format!("解析二维码响应失败: {e}")))?;
-    let data = raw.data.ok_or_else(|| AppError::CloudDrive("二维码响应缺少 data".into()))?;
-    let imgurl = data.imgurl.unwrap_or_default();
-    let sign = data
-        .sign
-        .or(data.code_string)
-        .unwrap_or_default();
-    if imgurl.is_empty() || sign.is_empty() {
+    if raw.errno.unwrap_or(-1) != 0 {
         return Err(AppError::CloudDrive(format!(
-            "二维码响应字段缺失 (status={:?}, raw={})",
-            raw.status,
+            "百度返回 errno={}（raw={}）",
+            raw.errno.unwrap_or(-1),
             &text[..text.len().min(200)]
         )));
     }
+    let mut imgurl = raw.imgurl.unwrap_or_default();
+    let sign = raw.sign.or(raw.code_string).unwrap_or_default();
+    if imgurl.is_empty() || sign.is_empty() {
+        return Err(AppError::CloudDrive(format!(
+            "二维码响应字段缺失（raw={}）",
+            &text[..text.len().min(200)]
+        )));
+    }
+    // The response omits the scheme; the browser resolves it against https://passport.baidu.com.
+    if !imgurl.starts_with("http://") && !imgurl.starts_with("https://") {
+        imgurl = format!("https://{imgurl}");
+    }
+    *QR_SESSION.lock().unwrap() = Some(QrSession { gid, callback, cookie });
     Ok(BaiduQrcode { imgurl, sign })
+}
+
+/// Exchange the unicast `v` (session ticket) for a BDUSS cookie via qrbdusslogin.
+async fn qrbdusslogin(
+    client: &reqwest::Client,
+    session: &QrSession,
+    ticket: &str,
+) -> Result<String, AppError> {
+    let ts = now_ms();
+    let url = format!(
+        "{PASSPORT_BASE}/v3/login/main/qrbdusslogin?v={ts}&u={}&bduss={ticket}&loginVersion=v4&qrcode=1&tpl=netdisk&apiver=v3&tt={ts}&traceid=&time={}&alg=v3&sig=rayburst&elapsed=3&shaOne=rayburst&callback=bd__cbs__rayburst",
+        urlencoding::encode("https://pan.baidu.com/disk/main"),
+        ts / 1000,
+    );
+    let resp = client
+        .get(&url)
+        .header("Cookie", session.cookie.clone())
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("请求登录确认失败: {e}")))?;
+    let cookie = collect_cookies(&resp);
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("读取登录确认响应失败: {e}")))?;
+    log::debug!("cloud-drive: qrbdusslogin resp (truncated): {}", &text[..text.len().min(300)]);
+
+    for part in cookie.split("; ") {
+        if let Some((name, value)) = part.split_once('=') {
+            if name == "BDUSS" && !value.is_empty() {
+                return Ok(value.to_string());
+            }
+        }
+    }
+    Err(AppError::CloudDrive("扫码已确认，但未能从百度获取 BDUSS（请重试）".into()))
 }
 
 /// Poll the login state for a QR code. On success the session is stored and
 /// `bduss` is returned in the payload.
+///
+/// One call runs the unicast loop internally (each pass waits ~30s, as the
+/// endpoint returns once per wait cycle); the frontend calls it once and shows
+/// a "waiting" state until it returns.
 #[tauri::command]
 pub async fn cloud_drive_baidu_qrlogin(
     app: AppHandle,
     sign: String,
 ) -> Result<BaiduQrStatus, AppError> {
-    let client = http_client()?;
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let url = format!(
-        "{PASSPORT_BASE}/v2/api/qrlogin?apiver=v3&sign={sign}&charset=UTF-8&tk=&t={ts}"
-    );
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::CloudDrive(format!("请求登录状态失败: {e}")))?;
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| AppError::CloudDrive(format!("读取登录状态响应失败: {e}")))?;
-    log::debug!("cloud-drive: qrlogin resp (truncated): {}", &text[..text.len().min(300)]);
+    let session = QR_SESSION
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::CloudDrive("请先获取二维码".into()))?;
+    // Unicast waits ~30s per pass when not yet scanned; give each pass 40s.
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(40))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
 
     // Tolerate several known response shapes:
-    //   {"errno":0,"data":{"status":"ok","bduss":"...","ptoken":"...","stoken":"..."}}
-    //   {"errno":1}                                        -> not scanned yet
-    //   {"errno":0,"data":{"status":"waiting"|"expired"|"fail",...}}
-    //   {"status":0|1,"data":{...}}
-    #[derive(Deserialize)]
-    struct Raw {
-        #[serde(default)]
-        errno: Option<i64>,
-        #[serde(default)]
-        status: Option<i64>,
-        data: Option<RawData>,
-    }
-    #[derive(Deserialize)]
-    struct RawData {
-        #[serde(default)]
-        status: Option<String>,
-        #[serde(default)]
-        bduss: Option<String>,
-        #[serde(default)]
-        ptoken: Option<String>,
-        #[serde(default)]
-        stoken: Option<String>,
-    }
+    //   tangram_guid_xxx({"errno":0,"channel_id":"...","channel_v":"{\"status\":0,\"v\":\"<bduss>\",\"u\":\"\"}"})
+    //   tangram_guid_xxx({"errno":1})                                   -> not scanned yet
+    //   empty body (endpoint silent)                                    -> keep waiting
+    for pass in 0..2 {
+        let ts = now_ms();
+        let url = format!(
+            "{PASSPORT_BASE}/channel/unicast?channel_id={sign}&qrloginfrom=pc&gid={}&callback={}&apiver=v3&tt={ts}&tpl=netdisk&_={ts}",
+            session.gid, session.callback,
+        );
+        let resp = client
+            .get(&url)
+            .header("Cookie", session.cookie.clone())
+            .send()
+            .await;
+        let text = match resp {
+            Ok(r) => r
+                .text()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("读取登录状态响应失败: {e}")))?,
+            Err(e) => {
+                log::debug!("cloud-drive: unicast pass #{pass} request error ({e}); keep waiting");
+                continue;
+            }
+        };
+        log::debug!("cloud-drive: unicast pass #{pass} resp (truncated): {}", &text[..text.len().min(400)]);
 
-    let raw: Raw = serde_json::from_str(&text)
-        .map_err(|e| AppError::CloudDrive(format!("解析登录状态响应失败: {e}")))?;
-
-    if let Some(data) = &raw.data {
-        let state = data.status.as_deref().unwrap_or("");
-        if state == "ok" {
-            if let Some(bduss) = &data.bduss {
-                if !bduss.is_empty() {
-                    save_cred(
-                        &app,
-                        &BaiduCredential {
-                            bduss: bduss.clone(),
-                            ptoken: data.ptoken.clone().unwrap_or_default(),
-                            stoken: data.stoken.clone().unwrap_or_default(),
-                        },
-                    )?;
-                    return Ok(BaiduQrStatus {
-                        status: "ok".into(),
-                        bduss: Some(bduss.clone()),
-                    });
+        let json = extract_jsonp(&text);
+        let Ok(raw) = json.parse::<serde_json::Value>() else {
+            continue; // empty / not JSON yet
+        };
+        let errno = raw.get("errno").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if errno == 0 {
+            let channel_v = raw.get("channel_v").and_then(|v| v.as_str()).unwrap_or("");
+            if !channel_v.is_empty() {
+                if let Ok(cv) = serde_json::from_str::<serde_json::Value>(channel_v) {
+                    let status = cv.get("status").and_then(|v| v.as_i64()).unwrap_or(1);
+                    let v = cv.get("v").and_then(|v| v.as_str()).unwrap_or("");
+                    if status == 0 && !v.is_empty() {
+                        let bduss = qrbdusslogin(&client, &session, v).await?;
+                        save_cred(&app, &BaiduCredential { bduss: bduss.clone(), ptoken: String::new(), stoken: String::new() })?;
+                        return Ok(BaiduQrStatus { status: "ok".into(), bduss: Some(bduss) });
+                    }
                 }
             }
-            // status ok without bduss is unexpected -> treat as waiting.
+            // errno=0 without a confirmed ticket -> scanned but not confirmed yet.
             return Ok(BaiduQrStatus { status: "waiting".into(), bduss: None });
         }
-        if state == "waiting" || state == "expired" || state == "fail" {
-            return Ok(BaiduQrStatus { status: state.into(), bduss: None });
+        if errno == 2 || errno == -6 {
+            return Ok(BaiduQrStatus { status: "expired".into(), bduss: None });
         }
+        // errno==1 (not scanned): loop again.
     }
-
-    // Unknown shape (e.g. {"errno":1} before scanning): keep waiting.
     Ok(BaiduQrStatus { status: "waiting".into(), bduss: None })
+}
+
+/// Extract the JSON payload from a JSONP response (`callback(...)`).
+fn extract_jsonp(text: &str) -> String {
+    let s = text.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    let start = s.find('(').map(|i| i + 1).unwrap_or(0);
+    let end = s.rfind(')').unwrap_or(s.len());
+    if start > 0 && end > start {
+        s[start..end].to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Whether a stored session exists.
