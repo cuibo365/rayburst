@@ -24,6 +24,18 @@ pub struct BaiduCredential {
     pub ptoken: String,
     #[serde(default)]
     pub stoken: String,
+    /// Full login cookie chain (BAIDUID; BDUSS; PTOKEN; STOKEN; ...) captured
+    /// at QR-login time. openapi authorize rejects bare `BDUSS=` with a
+    /// "与百度连接" risk-control page, so the full chain must be sent.
+    #[serde(default)]
+    pub cookie: String,
+    /// Cached OAuth access_token (valid ~30 days), so downloads do not re-run
+    /// the authorize flow on every submission.
+    #[serde(default)]
+    pub access_token: String,
+    /// Unix seconds when `access_token` expires.
+    #[serde(default)]
+    pub token_expires_at: u64,
 }
 
 /// Payload returned for QR-code login.
@@ -93,6 +105,54 @@ pub fn stored_bduss(app: &AppHandle) -> Option<String> {
         return None;
     }
     Some(cred.bduss)
+}
+
+/// Read the stored full cookie chain, if any.
+pub fn stored_cookie(app: &AppHandle) -> Option<String> {
+    let path = cred_path(app).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let cred: BaiduCredential = serde_json::from_str(&text).ok()?;
+    if cred.cookie.is_empty() {
+        return None;
+    }
+    Some(cred.cookie)
+}
+
+/// Read the cached access_token + its expiry (unix seconds), if any.
+pub fn stored_access_token(app: &AppHandle) -> Option<(String, u64)> {
+    let path = cred_path(app).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let cred: BaiduCredential = serde_json::from_str(&text).ok()?;
+    if cred.access_token.is_empty() {
+        return None;
+    }
+    Some((cred.access_token, cred.token_expires_at))
+}
+
+/// Persist (or update) the cached access_token and its expiry.
+pub fn save_access_token(
+    app: &AppHandle,
+    token: &str,
+    expires_at: u64,
+) -> Result<(), AppError> {
+    let path = cred_path(app)?;
+    let mut cred: BaiduCredential = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(BaiduCredential {
+            bduss: String::new(),
+            ptoken: String::new(),
+            stoken: String::new(),
+            cookie: String::new(),
+            access_token: String::new(),
+            token_expires_at: 0,
+        });
+    cred.access_token = token.to_string();
+    cred.token_expires_at = expires_at;
+    let text = serde_json::to_string_pretty(&cred)
+        .map_err(|e| AppError::CloudDrive(format!("序列化凭据失败: {e}")))?;
+    std::fs::write(&path, text)
+        .map_err(|e| AppError::CloudDrive(format!("保存凭据失败: {e}")))
 }
 
 fn save_cred(app: &AppHandle, cred: &BaiduCredential) -> Result<(), AppError> {
@@ -177,7 +237,7 @@ async fn qrbdusslogin(
     client: &reqwest::Client,
     session: &QrSession,
     ticket: &str,
-) -> Result<String, AppError> {
+) -> Result<(String, String), AppError> {
     let ts = now_ms();
     let url = format!(
         "{PASSPORT_BASE}/v3/login/main/qrbdusslogin?v={ts}&u={}&bduss={ticket}&loginVersion=v4&qrcode=1&tpl=netdisk&apiver=v3&tt={ts}&traceid=&time={}&alg=v3&sig=rayburst&elapsed=3&shaOne=rayburst&callback=bd__cbs__rayburst",
@@ -191,6 +251,13 @@ async fn qrbdusslogin(
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求登录确认失败: {e}")))?;
     let cookie = collect_cookies(&resp);
+    // Merge the pre-login cookies (BAIDUID etc.) with the login response's
+    // Set-Cookie chain (BDUSS/PTOKEN/STOKEN...) into one full chain.
+    let full_cookie = if session.cookie.is_empty() {
+        cookie.clone()
+    } else {
+        format!("{}; {}", session.cookie, cookie)
+    };
     let text = resp
         .text()
         .await
@@ -200,7 +267,7 @@ async fn qrbdusslogin(
     for part in cookie.split("; ") {
         if let Some((name, value)) = part.split_once('=') {
             if name == "BDUSS" && !value.is_empty() {
-                return Ok(value.to_string());
+                return Ok((value.to_string(), full_cookie));
             }
         }
     }
@@ -265,8 +332,18 @@ pub async fn cloud_drive_baidu_qrlogin(
                     let status = cv.get("status").and_then(|v| v.as_i64()).unwrap_or(1);
                     let v = cv.get("v").and_then(|v| v.as_str()).unwrap_or("");
                     if status == 0 && !v.is_empty() {
-                        let bduss = qrbdusslogin(&client, &session, v).await?;
-                        save_cred(&app, &BaiduCredential { bduss: bduss.clone(), ptoken: String::new(), stoken: String::new() })?;
+                        let (bduss, cookie) = qrbdusslogin(&client, &session, v).await?;
+                        save_cred(
+                            &app,
+                            &BaiduCredential {
+                                bduss: bduss.clone(),
+                                ptoken: String::new(),
+                                stoken: String::new(),
+                                cookie,
+                                access_token: String::new(),
+                                token_expires_at: 0,
+                            },
+                        )?;
                         return Ok(BaiduQrStatus { status: "ok".into(), bduss: Some(bduss) });
                     }
                 }

@@ -169,8 +169,8 @@ pub async fn cloud_drive_baidu_download(
         return Err(AppError::CloudDrive("没有选择文件".into()));
     }
 
-    let bduss = read_bduss(&app).await?;
-    let token = exchange_access_token(&bduss).await?;
+    let cookie = read_baidu_cookie(&app).await?;
+    let token = get_access_token(&app, &cookie).await?;
     // Expand checked folders into their contained files (recursively), so both
     // files and folders can be downloaded like LinkSwift.
     let files = expand_folders(&token, files).await?;
@@ -308,12 +308,14 @@ fn sanitize_dir_path(raw: &str) -> String {
     out
 }
 
-/// Read BDUSS: prefer the stored session from QR-code login (self-hosted UI),
-/// fall back to the (shared) WebView cookie store (in-page web version login).
-async fn read_bduss(app: &AppHandle) -> Result<String, AppError> {
-    if let Some(bduss) = crate::commands::baidu_drive::stored_bduss(app) {
-        log::debug!("cloud-drive: using stored BDUSS session");
-        return Ok(bduss);
+/// Full Cookie header for Baidu web calls (openapi authorize). Prefers the
+/// stored login chain (BAIDUID; BDUSS; PTOKEN; STOKEN; ...); falls back to
+/// assembling one from the main webview's cookies. A bare `BDUSS=` trips
+/// Baidu's "与百度连接" risk-control page on openapi.
+async fn read_baidu_cookie(app: &AppHandle) -> Result<String, AppError> {
+    if let Some(cookie) = crate::commands::baidu_drive::stored_cookie(app) {
+        log::debug!("cloud-drive: using stored full cookie chain");
+        return Ok(cookie);
     }
     let main = app
         .get_webview("main")
@@ -324,19 +326,42 @@ async fn read_bduss(app: &AppHandle) -> Result<String, AppError> {
     let cookies = main
         .cookies_for_url(url)
         .map_err(|e| AppError::CloudDrive(format!("读取网盘 Cookie 失败: {e}")))?;
+    let mut parts: Vec<String> = Vec::new();
     for cookie in cookies {
-        if cookie.name() == "BDUSS" {
-            return Ok(cookie.value().to_string());
-        }
+        parts.push(format!("{}={}", cookie.name(), cookie.value()));
     }
-    Err(AppError::CloudDrive(
-        "未检测到百度网盘登录状态，请在网盘页面完成登录或扫码登录".into(),
-    ))
+    if parts.is_empty() {
+        return Err(AppError::CloudDrive(
+            "未检测到百度网盘登录状态，请先登录网盘".into(),
+        ));
+    }
+    Ok(parts.join("; "))
 }
 
-/// Exchange BDUSS for an OAuth access_token using Baidu's public authorize
-/// endpoint (same flow as LinkSwift, including the one-click grant POST).
-async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
+/// Cached access_token wrapper: reuse the cached token while it is still
+/// valid (~30 days per Baidu's oob token), otherwise re-run the authorize
+/// flow and persist the fresh token.
+async fn get_access_token(app: &AppHandle, cookie: &str) -> Result<String, AppError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Some((token, expires_at)) = crate::commands::baidu_drive::stored_access_token(app) {
+        if expires_at > now {
+            log::debug!("cloud-drive: using cached access_token");
+            return Ok(token);
+        }
+    }
+    let token = exchange_access_token(cookie).await?;
+    // Baidu grants ~30 days; cache for 25 days to leave a safety margin.
+    crate::commands::baidu_drive::save_access_token(app, &token, now + 25 * 24 * 3600)?;
+    Ok(token)
+}
+
+/// Exchange the login cookie chain for an OAuth access_token using Baidu's
+/// public authorize endpoint (same flow as LinkSwift, including the one-click
+/// grant POST).
+async fn exchange_access_token(cookie: &str) -> Result<String, AppError> {
     let client = browser_client(30)?;
     let url = format!(
         "{BAIDU_AUTHORIZE_URL}?response_type=token&scope=basic,netdisk&client_id={BAIDU_CLIENT_ID}&redirect_uri=oob&confirm_login=0"
@@ -345,7 +370,7 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
     // First request: follow redirects, inspect the final body.
     let authorize = client
         .get(&url)
-        .header("Cookie", format!("BDUSS={bduss}"))
+        .header("Cookie", cookie)
         .send()
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求百度授权失败: {e}")))?;
@@ -381,7 +406,7 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
         );
         let grant = client
             .post(&url)
-            .header("Cookie", format!("BDUSS={bduss}"))
+            .header("Cookie", cookie)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(form)
             .send()
@@ -391,7 +416,7 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
 
         let confirm = client
             .get(&url)
-            .header("Cookie", format!("BDUSS={bduss}"))
+            .header("Cookie", cookie)
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("重新请求授权失败: {e}")))?;
