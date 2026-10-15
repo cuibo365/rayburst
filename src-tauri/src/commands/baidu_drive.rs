@@ -15,6 +15,18 @@ use tauri::{AppHandle, Manager};
 const PASSPORT_BASE: &str = "https://passport.baidu.com";
 const PAN_REST: &str = "https://pan.baidu.com/rest/2.0/xpan/file";
 const CRED_FILE: &str = "baidu_cred.json";
+/// Passport (login) requests must carry a real browser UA; the app-wide
+/// `pan.baidu.com` UA is for the aria2 download chain only and is rejected by
+/// Baidu's login endpoints.
+const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+fn passport_client(timeout_secs: u64) -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
+        .user_agent(BROWSER_UA)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
+}
 
 /// Stored Baidu session credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,7 +124,7 @@ fn clear_cred(app: &AppHandle) {
 /// Request a QR code for login. Returns the QR image URL and its sign token.
 #[tauri::command]
 pub async fn cloud_drive_baidu_qrcode(_app: AppHandle) -> Result<BaiduQrcode, AppError> {
-    let client = http_client()?;
+    let client = passport_client(30)?;
     // Same request shape as the web app: gid/callback/tt/_ are browser-generated
     // values; `tpl=netdisk` scopes the QR code to the Netdisk product.
     let gid = uuid::Uuid::new_v4().to_string().to_uppercase();
@@ -131,7 +143,7 @@ pub async fn cloud_drive_baidu_qrcode(_app: AppHandle) -> Result<BaiduQrcode, Ap
         .text()
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取二维码响应失败: {e}")))?;
-    log::debug!("cloud-drive: getqrcode resp (truncated): {}", &text[..text.len().min(400)]);
+    log::info!("cloud-drive: getqrcode resp (truncated): {}", &text[..text.len().min(400)]);
 
     // Flat shape: {"imgurl":"passport.baidu.com/v2/api/qrcode?sign=...","errno":0,"sign":"..."}
     #[derive(Deserialize)]
@@ -193,7 +205,7 @@ async fn qrbdusslogin(
         .text()
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取登录确认响应失败: {e}")))?;
-    log::debug!("cloud-drive: qrbdusslogin resp (truncated): {}", &text[..text.len().min(300)]);
+    log::info!("cloud-drive: qrbdusslogin resp (truncated): {}", &text[..text.len().min(300)]);
 
     for part in cookie.split("; ") {
         if let Some((name, value)) = part.split_once('=') {
@@ -222,11 +234,7 @@ pub async fn cloud_drive_baidu_qrlogin(
         .clone()
         .ok_or_else(|| AppError::CloudDrive("请先获取二维码".into()))?;
     // Unicast waits ~30s per pass when not yet scanned; give each pass 40s.
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36")
-        .timeout(std::time::Duration::from_secs(40))
-        .build()
-        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
+    let client = passport_client(40)?;
 
     // Tolerate several known response shapes:
     //   tangram_guid_xxx({"errno":0,"channel_id":"...","channel_v":"{\"status\":0,\"v\":\"<bduss>\",\"u\":\"\"}"})
@@ -249,11 +257,11 @@ pub async fn cloud_drive_baidu_qrlogin(
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("读取登录状态响应失败: {e}")))?,
             Err(e) => {
-                log::debug!("cloud-drive: unicast pass #{pass} request error ({e}); keep waiting");
+                log::info!("cloud-drive: unicast pass #{pass} request error ({e}); keep waiting");
                 continue;
             }
         };
-        log::debug!("cloud-drive: unicast pass #{pass} resp (truncated): {}", &text[..text.len().min(400)]);
+        log::info!("cloud-drive: unicast pass #{pass} resp (truncated): {}", &text[..text.len().min(400)]);
 
         let json = extract_jsonp(&text);
         let Ok(raw) = json.parse::<serde_json::Value>() else {

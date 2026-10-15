@@ -73,6 +73,11 @@ function errMsg(e: unknown): string {
   if (e && typeof e === 'object') {
     const m = (e as Record<string, unknown>).message
     if (typeof m === 'string' && m) return m
+    try {
+      return JSON.stringify(e)
+    } catch {
+      /* ignore */
+    }
   }
   return '操作失败，请查看日志'
 }
