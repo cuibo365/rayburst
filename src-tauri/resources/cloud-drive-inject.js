@@ -29,12 +29,15 @@
   }
   window.__rayburstBridge = true;
 
-  var api = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+  // Prefer the withGlobalTauri bridge (window.__TAURI__), fall back to the
+  // internal bridge. The buttons mount regardless of bridge availability —
+  // a missing bridge only disables the download button.
+  var api =
+    (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+    (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) ||
+    null;
   if (!api) {
     console.warn('[rayburst] Tauri bridge unavailable in this webview; download button disabled.');
-    // Clear the init flag so a later re-injection can retry full init.
-    window.__rayburstBridge = false;
-    return;
   }
 
   var TOOLBAR_SELECTOR = '.wp-s-agile-tool-bar__header';
@@ -204,6 +207,10 @@
     btn.addEventListener('mouseenter', function () { btn.style.background = 'rgba(60,60,60,.9)'; });
     btn.addEventListener('mouseleave', function () { btn.style.background = 'rgba(24,24,24,.85)'; });
     btn.addEventListener('click', function () {
+      if (!api) {
+        toast('Rayburst 桥接不可用，无法返回', true);
+        return;
+      }
       try { api('cloud_drive_nav_back'); } catch (e) { /* ignore */ }
     });
     document.body.appendChild(btn);
@@ -215,10 +222,14 @@
     if (window.location.hostname !== 'pan.baidu.com' || !/^\/disk\//.test(window.location.pathname)) {
       return;
     }
-    var b = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
-    if (!b) {
+    if (!document.body) {
       return;
     }
+    // Refresh the bridge handle: the bridge may arrive after the first run.
+    api =
+      (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+      (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) ||
+      null;
     mountToolbarButton();
     mountFloatingBack();
   }

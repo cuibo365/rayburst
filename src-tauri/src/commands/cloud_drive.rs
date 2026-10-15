@@ -105,16 +105,36 @@ pub fn cloud_drive_nav_back(app: AppHandle) -> Result<(), AppError> {
 /// initializationScript was not applied.
 fn spawn_nav_injector(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        // 25 passes x 800ms ≈ 20s window, long enough for a slow load / login
-        // redirect to land on pan.baidu.com/disk/*. The script is idempotent,
-        // so repeated evals only re-mount missing buttons.
-        for i in 0..25 {
+        // Persistent injection while on the Baidu page: a fixed 20s window can
+        // miss slow loads / long login flows, leaving the page with no buttons.
+        // Runs every 800ms until the webview navigates back to the app *after*
+        // having been on the Baidu page (navigation is async, so right after
+        // nav_open the URL may still be tauri://localhost — do not exit then).
+        let mut was_on_pan = false;
+        loop {
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             let Some(main) = app.get_webview("main") else {
                 return;
             };
-            let _ = main.eval(INJECT_SCRIPT);
-            log::debug!("cloud-drive: nav injector pass #{i}");
+            match main.url() {
+                Ok(url) => {
+                    if url.scheme() == "tauri" {
+                        if was_on_pan {
+                            log::debug!("cloud-drive: injector stopped (back on app page)");
+                            return;
+                        }
+                        continue; // navigation in flight; keep waiting
+                    }
+                    if url.host_str() == Some("pan.baidu.com") && url.path().starts_with("/disk/") {
+                        was_on_pan = true;
+                        let _ = main.eval(INJECT_SCRIPT);
+                    }
+                }
+                Err(e) => {
+                    // Webview is busy mid-navigation; retry next tick.
+                    log::debug!("cloud-drive: injector url unavailable ({e})");
+                }
+            }
         }
     });
 }
