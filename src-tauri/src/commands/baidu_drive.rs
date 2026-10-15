@@ -15,18 +15,6 @@ use tauri::{AppHandle, Manager};
 const PASSPORT_BASE: &str = "https://passport.baidu.com";
 const PAN_REST: &str = "https://pan.baidu.com/rest/2.0/xpan/file";
 const CRED_FILE: &str = "baidu_cred.json";
-/// Passport (login) requests must carry a real browser UA; the app-wide
-/// `pan.baidu.com` UA is for the aria2 download chain only and is rejected by
-/// Baidu's login endpoints.
-const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-
-fn passport_client(timeout_secs: u64) -> Result<reqwest::Client, AppError> {
-    reqwest::Client::builder()
-        .user_agent(BROWSER_UA)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build()
-        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
-}
 
 /// Stored Baidu session credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,7 +112,7 @@ fn clear_cred(app: &AppHandle) {
 /// Request a QR code for login. Returns the QR image URL and its sign token.
 #[tauri::command]
 pub async fn cloud_drive_baidu_qrcode(_app: AppHandle) -> Result<BaiduQrcode, AppError> {
-    let client = passport_client(30)?;
+    let client = crate::commands::cloud_drive::browser_client(30)?;
     // Same request shape as the web app: gid/callback/tt/_ are browser-generated
     // values; `tpl=netdisk` scopes the QR code to the Netdisk product.
     let gid = uuid::Uuid::new_v4().to_string().to_uppercase();
@@ -236,7 +224,7 @@ pub async fn cloud_drive_baidu_qrlogin(
         .clone()
         .ok_or_else(|| AppError::CloudDrive("请先获取二维码".into()))?;
     // Unicast waits ~30s per pass when not yet scanned; give each pass 40s.
-    let client = passport_client(40)?;
+    let client = crate::commands::cloud_drive::browser_client(40)?;
 
     // Tolerate several known response shapes:
     //   tangram_guid_xxx({"errno":0,"channel_id":"...","channel_v":"{\"status\":0,\"v\":\"<bduss>\",\"u\":\"\"}"})
@@ -361,6 +349,10 @@ pub async fn cloud_drive_baidu_list(app: AppHandle, dir: String) -> Result<Vec<C
         path: String,
         #[serde(default)]
         isdir: u8,
+        #[serde(rename = "server_mtime", default)]
+        mtime: u64,
+        #[serde(default)]
+        category: u32,
     }
 
     let raw: Raw = serde_json::from_str(&text)
@@ -379,6 +371,8 @@ pub async fn cloud_drive_baidu_list(app: AppHandle, dir: String) -> Result<Vec<C
             size: f.size,
             path: f.path,
             isdir: f.isdir != 0,
+            mtime: f.mtime,
+            category: f.category,
         });
     }
     Ok(out)

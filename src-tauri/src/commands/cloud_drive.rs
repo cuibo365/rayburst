@@ -18,6 +18,8 @@ use tauri_plugin_store::StoreExt;
 const PAN_URL: &str = "https://pan.baidu.com/disk/main";
 const WEBVIEW_LABEL: &str = "cloud-drive-baidu";
 const USER_AGENT: &str = "pan.baidu.com";
+/// Real browser UA for Baidu web pages (passport login, openapi authorize).
+const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 /// Public client_id used by the Baidu Netdisk web app (same as LinkSwift).
 const BAIDU_CLIENT_ID: &str = "omiOnr2tYnN9vSyDErcVFWpPU2mZA7YO";
 const BAIDU_AUTHORIZE_URL: &str = "https://openapi.baidu.com/oauth/2.0/authorize";
@@ -43,6 +45,12 @@ pub struct CloudDriveFile {
     /// True for folders; the backend expands them into their contained files.
     #[serde(default)]
     pub isdir: bool,
+    /// Last-modified unix timestamp (seconds), from the xpan list API.
+    #[serde(default)]
+    pub mtime: u64,
+    /// Baidu file category (1 video, 2 audio, 3 image, 4 doc, 5 app, 6 other, 7 torrent).
+    #[serde(default)]
+    pub category: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +64,17 @@ pub(crate) fn http_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
+}
+
+/// Client with a real browser UA for Baidu **web pages** (passport login,
+/// openapi authorize). The app-wide `pan.baidu.com` UA is for API/aria2 and
+/// gets rejected by Baidu's web endpoints.
+pub(crate) fn browser_client(timeout_secs: u64) -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
+        .user_agent(BROWSER_UA)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
 }
@@ -318,7 +337,7 @@ async fn read_bduss(app: &AppHandle) -> Result<String, AppError> {
 /// Exchange BDUSS for an OAuth access_token using Baidu's public authorize
 /// endpoint (same flow as LinkSwift, including the one-click grant POST).
 async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
-    let client = http_client()?;
+    let client = browser_client(30)?;
     let url = format!(
         "{BAIDU_AUTHORIZE_URL}?response_type=token&scope=basic,netdisk&client_id={BAIDU_CLIENT_ID}&redirect_uri=oob&confirm_login=0"
     );
@@ -334,6 +353,10 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
         .text()
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取授权响应失败: {e}")))?;
+    log::info!(
+        "cloud-drive: authorize resp (truncated): {}",
+        &authorize[..authorize.len().min(300)]
+    );
 
     if let Some(token) = extract_access_token(&authorize) {
         return Ok(token);
@@ -346,6 +369,7 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
         })?;
         let client_id = extract_html_field(&authorize, "client_id")
             .ok_or_else(|| AppError::CloudDrive("授权页面缺少 client_id".into()))?;
+        log::info!("cloud-drive: authorize grant form found (bdstoken/client_id extracted)");
         let form = format!(
             "grant_permissions_arr={}&bdstoken={}&client_id={}&response_type={}&display={}&grant_permissions={}",
             urlencoding::encode("netdisk"),
@@ -355,7 +379,7 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
             urlencoding::encode("page"),
             urlencoding::encode("basic,netdisk"),
         );
-        let _ = client
+        let grant = client
             .post(&url)
             .header("Cookie", format!("BDUSS={bduss}"))
             .header("Content-Type", "application/x-www-form-urlencoded")
@@ -363,6 +387,7 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("提交授权确认失败: {e}")))?;
+        log::info!("cloud-drive: authorize grant POST status={}", grant.status().as_u16());
 
         let confirm = client
             .get(&url)
@@ -374,9 +399,15 @@ async fn exchange_access_token(bduss: &str) -> Result<String, AppError> {
             .text()
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取授权响应失败: {e}")))?;
+        log::info!(
+            "cloud-drive: authorize confirm resp (truncated): {}",
+            &confirm[..confirm.len().min(300)]
+        );
         if let Some(token) = extract_access_token(&confirm) {
             return Ok(token);
         }
+    } else {
+        log::info!("cloud-drive: authorize resp has no grant form (page may be login/error page)");
     }
 
     Err(AppError::CloudDrive(
@@ -476,6 +507,8 @@ async fn expand_folders(
                 size: child["size"].as_u64().unwrap_or(0),
                 path,
                 isdir: child["isdir"].as_i64().unwrap_or(0) == 1,
+                mtime: child["server_mtime"].as_u64().unwrap_or(0),
+                category: child["category"].as_u64().unwrap_or(0) as u32,
             });
         }
     }

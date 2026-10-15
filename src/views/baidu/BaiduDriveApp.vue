@@ -26,6 +26,8 @@ interface DriveFile {
   size: number
   path: string
   isdir: boolean
+  mtime: number
+  category: number
 }
 interface QrData {
   imgurl: string
@@ -58,6 +60,28 @@ function fmtSize(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+const CATEGORY_LABELS: Record<number, string> = {
+  1: '视频',
+  2: '音频',
+  3: '图片',
+  4: '文档',
+  5: '应用',
+  6: '其他',
+  7: '种子',
+}
+
+function fmtType(f: DriveFile): string {
+  if (f.isdir) return '文件夹'
+  return CATEGORY_LABELS[f.category] ?? '文件'
+}
+
+function fmtTime(ts: number): string {
+  if (!ts) return '-'
+  const d = new Date(ts * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function stopPoll() {
@@ -289,6 +313,8 @@ onUnmounted(stopPoll)
                 <th class="baidu-col-check"></th>
                 <th>名称</th>
                 <th class="baidu-col-size">大小</th>
+                <th class="baidu-col-type">类型</th>
+                <th class="baidu-col-time">修改时间</th>
               </tr>
             </thead>
             <tbody>
@@ -311,6 +337,8 @@ onUnmounted(stopPoll)
                   </button>
                 </td>
                 <td class="baidu-col-size baidu-muted">{{ f.isdir ? '—' : fmtSize(f.size) }}</td>
+                <td class="baidu-col-type baidu-muted">{{ fmtType(f) }}</td>
+                <td class="baidu-col-time baidu-muted">{{ fmtTime(f.mtime) }}</td>
               </tr>
             </tbody>
           </table>
@@ -477,7 +505,15 @@ onUnmounted(stopPoll)
   width: 44px;
 }
 .baidu-col-size {
-  width: 100px;
+  width: 110px;
+  text-align: right;
+}
+.baidu-col-type {
+  width: 90px;
+  text-align: right;
+}
+.baidu-col-time {
+  width: 150px;
   text-align: right;
 }
 .baidu-name {
