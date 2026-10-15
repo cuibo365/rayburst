@@ -963,6 +963,10 @@
     "openFailed": "Failed to open the drive, please retry",
     "baiduNav": "Baidu Netdisk (in-page)",
     "baiduNavDesc": "Open Baidu Netdisk full-screen inside the main window",
-    "openInPage": "Open in page"
+    "openInPage": "Open in page",
+    "baiduApp": "Baidu Netdisk (In-App)",
+    "baiduAppDesc": "Native UI. Scan to log in, browse and download to Rayburst",
+    "openApp": "Open In-App",
+    "backToCards": "Back to drives"
   }
 }

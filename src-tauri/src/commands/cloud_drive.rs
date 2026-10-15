@@ -52,7 +52,7 @@ pub struct CloudDriveResult {
     pub failed: usize,
 }
 
-fn http_client() -> Result<reqwest::Client, AppError> {
+pub(crate) fn http_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
@@ -289,8 +289,13 @@ fn sanitize_dir_path(raw: &str) -> String {
     out
 }
 
-/// Read BDUSS from the (shared) WebView cookie store.
+/// Read BDUSS: prefer the stored session from QR-code login (self-hosted UI),
+/// fall back to the (shared) WebView cookie store (in-page web version login).
 async fn read_bduss(app: &AppHandle) -> Result<String, AppError> {
+    if let Some(bduss) = crate::commands::baidu_drive::stored_bduss(app) {
+        log::debug!("cloud-drive: using stored BDUSS session");
+        return Ok(bduss);
+    }
     let main = app
         .get_webview("main")
         .ok_or_else(|| AppError::CloudDrive("主窗口不可用".into()))?;
@@ -306,7 +311,7 @@ async fn read_bduss(app: &AppHandle) -> Result<String, AppError> {
         }
     }
     Err(AppError::CloudDrive(
-        "未检测到百度网盘登录状态，请先在网盘页面完成登录".into(),
+        "未检测到百度网盘登录状态，请在网盘页面完成登录或扫码登录".into(),
     ))
 }
 

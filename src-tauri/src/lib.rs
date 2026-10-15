@@ -782,6 +782,11 @@ pub fn run() {
             commands::cloud_drive_baidu_download,
             commands::cloud_drive_baidu_nav_open,
             commands::cloud_drive_nav_back,
+            commands::cloud_drive_baidu_qrcode,
+            commands::cloud_drive_baidu_qrlogin,
+            commands::cloud_drive_baidu_login_status,
+            commands::cloud_drive_baidu_logout,
+            commands::cloud_drive_baidu_list,
         ])
         // ── Window event interception ─────────────────────────────────
         //

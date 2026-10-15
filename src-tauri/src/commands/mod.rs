@@ -1,4 +1,5 @@
 pub mod aria2;
+pub mod baidu_drive;
 pub mod bt_blocklist;
 pub mod cloud_drive;
 pub mod config;
@@ -24,6 +25,7 @@ pub mod updater;
 pub mod upnp;
 
 pub use aria2::*;
+pub use baidu_drive::*;
 pub use bt_blocklist::*;
 pub use cloud_drive::*;
 pub use config::*;
