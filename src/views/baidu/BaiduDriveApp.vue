@@ -6,17 +6,18 @@
  * (QR login -> stored BDUSS -> xpan list -> dlink -> rayrburst aria2), and
  * this component renders the drive UI natively.
  */
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { NIcon, NButton, NEmpty, NSpin, NCheckbox } from 'naive-ui'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { NIcon, NButton, NEmpty, NSpin, NCheckbox, NInput } from 'naive-ui'
 import {
   FolderOpenOutline,
   DocumentOutline,
   DownloadOutline,
-  RefreshOutline,
   LogOutOutline,
   ChevronForwardOutline,
   CloudOutline,
+  QrCodeOutline,
 } from '@vicons/ionicons5'
 import { useAppMessage } from '@/composables/useAppMessage'
 
@@ -29,21 +30,13 @@ interface DriveFile {
   mtime: number
   category: number
 }
-interface QrData {
-  imgurl: string
-  sign: string
-}
-interface QrStatus {
-  status: string
-  bduss?: string
-}
 
 const message = useAppMessage()
 
 const state = ref<'checking' | 'login' | 'browse'>('checking')
-const qr = ref<QrData | null>(null)
-const qrExpired = ref(false)
-const pollTimer = ref<number | null>(null)
+const authInput = ref('')
+const saving = ref(false)
+const authorizeUrl = ref('')
 
 const crumbPath = ref<string[]>([])
 const files = ref<DriveFile[]>([])
@@ -84,13 +77,6 @@ function fmtTime(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function stopPoll() {
-  if (pollTimer.value !== null) {
-    clearInterval(pollTimer.value)
-    pollTimer.value = null
-  }
-}
-
 function errMsg(e: unknown): string {
   if (e instanceof Error) return e.message || '操作失败'
   if (typeof e === 'string' && e) return e
@@ -106,40 +92,37 @@ function errMsg(e: unknown): string {
   return '操作失败，请查看日志'
 }
 
-let polling = false
-async function pollOnce() {
-  if (polling || !qr.value) return
-  polling = true
+async function openAuthorize() {
   try {
-    const st = await invoke<QrStatus>('cloud_drive_baidu_qrlogin', { sign: qr.value.sign })
-    if (st.status === 'ok') {
-      stopPoll()
-      message.success('登录成功')
-      state.value = 'browse'
-      await loadDir('/')
-    } else if (st.status === 'expired') {
-      qrExpired.value = true
-      stopPoll()
+    if (!authorizeUrl.value) {
+      authorizeUrl.value = await invoke<string>('cloud_drive_baidu_oauth_url')
     }
-  } catch {
-    // transient network error; keep polling
-  } finally {
-    polling = false
+    await openUrl(authorizeUrl.value)
+    message.info('请在浏览器中完成授权，然后复制页面中的 code 或 access_token 粘贴到下方')
+  } catch (err) {
+    message.error(errMsg(err))
   }
 }
 
-function startPoll() {
-  stopPoll()
-  pollTimer.value = window.setInterval(pollOnce, 3000)
-}
-
-async function refreshQr() {
-  qrExpired.value = false
+async function saveToken() {
+  const input = authInput.value.trim()
+  if (!input) {
+    message.warning('请先粘贴 code 或 access_token')
+    return
+  }
+  saving.value = true
   try {
-    qr.value = await invoke<QrData>('cloud_drive_baidu_qrcode')
-    startPoll()
+    const r = (await invoke('cloud_drive_baidu_save_token', {
+      tokenOrCode: input,
+    })) as string
+    message.success(r)
+    authInput.value = ''
+    state.value = 'browse'
+    await loadDir('/')
   } catch (err) {
     message.error(errMsg(err))
+  } finally {
+    saving.value = false
   }
 }
 
@@ -152,9 +135,8 @@ async function loadDir(dir: string) {
     crumbPath.value = dir === '/' ? [] : dir.split('/').filter(Boolean)
   } catch (err) {
     const msg = errMsg(err)
-    if (/未登录|登录/.test(msg)) {
+    if (/未授权|未登录|access_token/.test(msg)) {
       state.value = 'login'
-      await refreshQr()
     } else {
       message.error(msg)
     }
@@ -200,10 +182,8 @@ async function startDownload() {
 }
 
 function logout() {
-  stopPoll()
   void invoke('cloud_drive_baidu_logout').catch(() => {})
   state.value = 'login'
-  void refreshQr()
 }
 
 onMounted(async () => {
@@ -214,15 +194,11 @@ onMounted(async () => {
       await loadDir('/')
     } else {
       state.value = 'login'
-      await refreshQr()
     }
   } catch {
     state.value = 'login'
-    await refreshQr()
   }
 })
-
-onUnmounted(stopPoll)
 </script>
 
 <template>
@@ -237,24 +213,30 @@ onUnmounted(stopPoll)
       <div class="baidu-login-card">
         <div class="baidu-login-title">
           <NIcon :size="22" aria-hidden="true"><CloudOutline /></NIcon>
-          <span>扫码登录百度网盘</span>
+          <span>授权百度网盘</span>
         </div>
-        <p class="baidu-muted">使用手机百度 App / 百度网盘 App 扫码，登录后即可浏览与下载</p>
-        <div class="baidu-qr">
-          <img v-if="qr && qr.imgurl" :src="qr.imgurl" alt="登录二维码" class="baidu-qr-img" />
-          <div v-else class="baidu-qr-empty"><NSpin size="large" /></div>
-          <div v-if="qrExpired" class="baidu-qr-overlay">
-            <NButton type="primary" size="small" @click="refreshQr">二维码已过期，点击刷新</NButton>
-          </div>
-        </div>
+        <p class="baidu-muted">
+          点击下方按钮在浏览器中打开授权页面（支持扫码登录），完成授权后复制页面中的
+          <b>refresh_token</b> 粘贴到下方输入框保存，将自动换取 access_token。
+        </p>
         <div class="baidu-login-actions">
-          <NButton size="small" secondary @click="refreshQr">
+          <NButton type="primary" block @click="openAuthorize">
             <template #icon
-              ><NIcon><RefreshOutline /></NIcon
+              ><NIcon><QrCodeOutline /></NIcon
             ></template>
-            刷新二维码
+            打开授权页面
           </NButton>
         </div>
+        <NInput
+          v-model:value="authInput"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 4 }"
+          placeholder="粘贴 refresh_token（以 122. 开头），将自动换取 access_token"
+          class="baidu-login-input"
+        />
+        <NButton type="primary" block :loading="saving" :disabled="!authInput.trim()" @click="saveToken">
+          保存并登录
+        </NButton>
       </div>
     </div>
 
@@ -371,47 +353,31 @@ onUnmounted(stopPoll)
   color: var(--m3-on-surface-variant);
 }
 .baidu-login-card {
-  width: 300px;
+  width: 340px;
   padding: 24px;
   border-radius: 12px;
   background: var(--m3-surface-container, rgba(255, 255, 255, 0.06));
   border: 1px solid rgba(128, 128, 128, 0.25);
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 14px;
 }
 .baidu-login-title {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   font-size: 16px;
   font-weight: 600;
   color: var(--m3-on-surface);
 }
-.baidu-qr {
-  position: relative;
-  width: 180px;
-  height: 180px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.baidu-login-card .baidu-muted {
+  text-align: left;
+  line-height: 1.6;
 }
-.baidu-qr-img {
-  width: 180px;
-  height: 180px;
-  display: block;
-}
-.baidu-qr-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(255, 255, 255, 0.92);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.baidu-login-input {
+  width: 100%;
 }
 .baidu-login-actions {
   display: flex;

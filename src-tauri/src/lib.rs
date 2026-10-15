@@ -780,13 +780,12 @@ pub fn run() {
             commands::system_shutdown,
             commands::cancel_shutdown,
             commands::cloud_drive_baidu_download,
-            commands::cloud_drive_baidu_nav_open,
-            commands::cloud_drive_nav_back,
-            commands::cloud_drive_baidu_qrcode,
-            commands::cloud_drive_baidu_qrlogin,
             commands::cloud_drive_baidu_login_status,
             commands::cloud_drive_baidu_logout,
             commands::cloud_drive_baidu_list,
+            commands::cloud_drive_baidu_save_token,
+            commands::cloud_drive_baidu_oauth_url,
+            commands::cloud_drive_baidu_oauth_status,
         ])
         // ── Window event interception ─────────────────────────────────
         //

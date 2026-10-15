@@ -1,40 +1,34 @@
 //! Cloud drive (网盘) integration.
 //!
-//! The Baidu Netdisk web version runs **inside the main window's webview** in
-//! full-screen navigation mode (see `cloud_drive_baidu_nav_open`). A bridge
-//! script (`resources/cloud-drive-inject.js`) is injected so the page can
-//! mount a "返回 Rayburst" button and a download button calling the download
-//! command.
+//! Self-hosted Baidu Netdisk interface: OAuth authorization (QR login + code /
+//! access_token paste-back) -> access_token -> xpan list / filemetas dlink ->
+//! rayrburst aria2. The refresh_token is permanent, so token renewal is a pure
+//! API call and never re-opens the authorization page.
 //!
-//! Download chain (all public Baidu APIs, same as LinkSwift):
-//!   WebView cookie store -> BDUSS -> openapi authorize -> access_token
-//!   -> filemetas (dlink) -> rayrburst aria2 (via `downloads::submit`).
+//! Download chain (all public Baidu APIs):
+//!   OAuth access_token -> filemetas (dlink) -> rayrburst aria2 (via `downloads::submit`).
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-const PAN_URL: &str = "https://pan.baidu.com/disk/main";
-const WEBVIEW_LABEL: &str = "cloud-drive-baidu";
 const USER_AGENT: &str = "pan.baidu.com";
-/// Real browser UA for Baidu web pages (passport login, openapi authorize).
-const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-/// Public client_id used by the Baidu Netdisk web app (same as LinkSwift).
-const BAIDU_CLIENT_ID: &str = "omiOnr2tYnN9vSyDErcVFWpPU2mZA7YO";
-const BAIDU_AUTHORIZE_URL: &str = "https://openapi.baidu.com/oauth/2.0/authorize";
+/// Registered OAuth app (alistgo's Baidu client) that supports QR login on the
+/// authorize page (`qrcode=1`). The callback lands on alistgo.com; the user
+/// pastes the resulting code/access_token back into Rayburst.
+const OAUTH_CLIENT_ID: &str = "hq9yQ9w9kR4YHj1kyYafLygVocobh7Sf";
+const OAUTH_CLIENT_SECRET: &str = "YH2VpZcFJHYNnV6vLfHQXDBhcE7ZChyE";
+const OAUTH_REDIRECT_URI: &str = "https://alistgo.com/tool/baidu/callback";
+const OAUTH_AUTHORIZE_URL: &str = "https://openapi.baidu.com/oauth/2.0/authorize";
+const OAUTH_TOKEN_URL: &str = "https://openapi.baidu.com/oauth/2.0/token";
 const BAIDU_FILE_METAS_URL: &str = "https://pan.baidu.com/rest/2.0/xpan/multimedia";
 const BAIDU_APP_ID: u32 = 250528;
 const PAN_REFERER: &str = "https://pan.baidu.com/";
 /// List a folder's children (used to expand checked folders into files).
 const BAIDU_FILE_LIST_URL: &str = "https://pan.baidu.com/rest/2.0/xpan/file?method=list&showempty=1";
 
-/// Injection script embedded at compile time (download + back button on the
-/// Baidu page). Injected into the main window both via the config-level
-/// initializationScript and via repeated eval in spawn_nav_injector.
-const INJECT_SCRIPT: &str = include_str!("../../resources/cloud-drive-inject.js");
-
-/// A file checked by the user in the Baidu Netdisk page (sent by the injected script).
+/// A file checked by the user in the Baidu Netdisk page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudDriveFile {
     pub fs_id: u64,
@@ -68,97 +62,7 @@ pub(crate) fn http_client() -> Result<reqwest::Client, AppError> {
         .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
 }
 
-/// Client with a real browser UA for Baidu **web pages** (passport login,
-/// openapi authorize). The app-wide `pan.baidu.com` UA is for API/aria2 and
-/// gets rejected by Baidu's web endpoints.
-pub(crate) fn browser_client(timeout_secs: u64) -> Result<reqwest::Client, AppError> {
-    reqwest::Client::builder()
-        .user_agent(BROWSER_UA)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build()
-        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
-}
-
-/// Full-screen navigation mode: navigate the MAIN window's webview (the same
-/// one that renders the app UI) to the Baidu Netdisk page, then keep
-/// re-injecting the nav control script until the page is ready. Reuses the
-/// main webview, so no second WebView2 instance is created (creating a second
-/// instance fails/hangs the main thread on some machines).
-#[tauri::command]
-pub fn cloud_drive_baidu_nav_open(
-    app: AppHandle,
-    url: Option<String>,
-) -> Result<(), AppError> {
-    let target = url.unwrap_or_else(|| PAN_URL.to_string());
-    let main = app
-        .get_webview("main")
-        .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?;
-    let parsed = target
-        .parse::<tauri::Url>()
-        .map_err(|e| AppError::CloudDrive(format!("URL 解析失败: {e}")))?;
-    log::info!("cloud-drive: navigating main webview to {target}");
-    main.navigate(parsed)
-        .map_err(|e| AppError::CloudDrive(format!("导航失败: {e}")))?;
-    spawn_nav_injector(app.clone());
-    Ok(())
-}
-
-/// Navigate the main webview back to the app (tauri://localhost). Called by
-/// the injected "返回 Rayburst" button on the Baidu page.
-#[tauri::command]
-pub fn cloud_drive_nav_back(app: AppHandle) -> Result<(), AppError> {
-    let main = app
-        .get_webview("main")
-        .ok_or_else(|| AppError::CloudDrive("主窗口不存在".into()))?;
-    let back = "tauri://localhost"
-        .parse::<tauri::Url>()
-        .map_err(|e| AppError::CloudDrive(format!("URL 解析失败: {e}")))?;
-    log::info!("cloud-drive: navigating main webview back to app");
-    main.navigate(back)
-        .map_err(|e| AppError::CloudDrive(format!("返回失败: {e}")))?;
-    Ok(())
-}
-
-/// Re-inject the bridge script (download + back button) into the main window
-/// until it sticks, in case the page is still loading or the config-level
-/// initializationScript was not applied.
-fn spawn_nav_injector(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        // Persistent injection while on the Baidu page: a fixed 20s window can
-        // miss slow loads / long login flows, leaving the page with no buttons.
-        // Runs every 800ms until the webview navigates back to the app *after*
-        // having been on the Baidu page (navigation is async, so right after
-        // nav_open the URL may still be tauri://localhost — do not exit then).
-        let mut was_on_pan = false;
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            let Some(main) = app.get_webview("main") else {
-                return;
-            };
-            match main.url() {
-                Ok(url) => {
-                    if url.scheme() == "tauri" {
-                        if was_on_pan {
-                            log::debug!("cloud-drive: injector stopped (back on app page)");
-                            return;
-                        }
-                        continue; // navigation in flight; keep waiting
-                    }
-                    if url.host_str() == Some("pan.baidu.com") && url.path().starts_with("/disk/") {
-                        was_on_pan = true;
-                        let _ = main.eval(INJECT_SCRIPT);
-                    }
-                }
-                Err(e) => {
-                    // Webview is busy mid-navigation; retry next tick.
-                    log::debug!("cloud-drive: injector url unavailable ({e})");
-                }
-            }
-        }
-    });
-}
-
-/// Download checked files: cookie -> token -> dlink -> aria2.
+/// Download checked files: access_token -> dlink -> aria2.
 #[tauri::command]
 pub async fn cloud_drive_baidu_download(
     app: AppHandle,
@@ -169,8 +73,7 @@ pub async fn cloud_drive_baidu_download(
         return Err(AppError::CloudDrive("没有选择文件".into()));
     }
 
-    let cookie = read_baidu_cookie(&app).await?;
-    let token = get_access_token(&app, &cookie).await?;
+    let token = get_access_token(&app).await?;
     // Expand checked folders into their contained files (recursively), so both
     // files and folders can be downloaded like LinkSwift.
     let files = expand_folders(&token, files).await?;
@@ -308,159 +211,90 @@ fn sanitize_dir_path(raw: &str) -> String {
     out
 }
 
-/// Full Cookie header for Baidu web calls (openapi authorize). Prefers the
-/// stored login chain (BAIDUID; BDUSS; PTOKEN; STOKEN; ...); falls back to
-/// assembling one from the main webview's cookies. A bare `BDUSS=` trips
-/// Baidu's "与百度连接" risk-control page on openapi.
-async fn read_baidu_cookie(app: &AppHandle) -> Result<String, AppError> {
-    if let Some(cookie) = crate::commands::baidu_drive::stored_cookie(app) {
-        log::debug!("cloud-drive: using stored full cookie chain");
-        return Ok(cookie);
-    }
-    let main = app
-        .get_webview("main")
-        .ok_or_else(|| AppError::CloudDrive("主窗口不可用".into()))?;
-    let url: tauri::Url = "https://pan.baidu.com"
-        .parse()
-        .map_err(|e| AppError::CloudDrive(format!("URL 解析失败: {e}")))?;
-    let cookies = main
-        .cookies_for_url(url)
-        .map_err(|e| AppError::CloudDrive(format!("读取网盘 Cookie 失败: {e}")))?;
-    let mut parts: Vec<String> = Vec::new();
-    for cookie in cookies {
-        parts.push(format!("{}={}", cookie.name(), cookie.value()));
-    }
-    if parts.is_empty() {
-        return Err(AppError::CloudDrive(
-            "未检测到百度网盘登录状态，请先登录网盘".into(),
-        ));
-    }
-    Ok(parts.join("; "))
-}
-
-/// Cached access_token wrapper: reuse the cached token while it is still
-/// valid (~30 days per Baidu's oob token), otherwise re-run the authorize
-/// flow and persist the fresh token.
-async fn get_access_token(app: &AppHandle, cookie: &str) -> Result<String, AppError> {
+/// Resolve a usable access_token: cached token if still valid, otherwise
+/// renew via the permanent refresh_token (pure API, no user interaction).
+pub async fn get_access_token(app: &AppHandle) -> Result<String, AppError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    if let Some((token, expires_at)) = crate::commands::baidu_drive::stored_access_token(app) {
-        if expires_at > now {
-            log::debug!("cloud-drive: using cached access_token");
-            return Ok(token);
-        }
-    }
-    let token = exchange_access_token(cookie).await?;
-    // Baidu grants ~30 days; cache for 25 days to leave a safety margin.
-    crate::commands::baidu_drive::save_access_token(app, &token, now + 25 * 24 * 3600)?;
-    Ok(token)
-}
-
-/// Exchange the login cookie chain for an OAuth access_token using Baidu's
-/// public authorize endpoint (same flow as LinkSwift, including the one-click
-/// grant POST).
-async fn exchange_access_token(cookie: &str) -> Result<String, AppError> {
-    let client = browser_client(30)?;
-    let url = format!(
-        "{BAIDU_AUTHORIZE_URL}?response_type=token&scope=basic,netdisk&client_id={BAIDU_CLIENT_ID}&redirect_uri=oob&confirm_login=0"
-    );
-
-    // First request: follow redirects, inspect the final body.
-    let authorize = client
-        .get(&url)
-        .header("Cookie", cookie)
-        .send()
-        .await
-        .map_err(|e| AppError::CloudDrive(format!("请求百度授权失败: {e}")))?;
-    let authorize = authorize
-        .text()
-        .await
-        .map_err(|e| AppError::CloudDrive(format!("读取授权响应失败: {e}")))?;
-    log::info!(
-        "cloud-drive: authorize resp (truncated): {}",
-        &authorize[..authorize.len().min(300)]
-    );
-
-    if let Some(token) = extract_access_token(&authorize) {
+    let Some((token, refresh, expires_at)) = crate::commands::baidu_drive::stored_oauth(app)
+    else {
+        return Err(AppError::CloudDrive(
+            "未授权百度网盘，请先获取并填入 access_token".into(),
+        ));
+    };
+    if expires_at > now {
+        log::debug!("cloud-drive: using cached access_token");
         return Ok(token);
     }
-
-    // Not yet granted: auto-confirm on the authorization page (LinkSwift flow).
-    if authorize.contains("authorize") {
-        let bdstoken = extract_html_field(&authorize, "bdstoken").ok_or_else(|| {
-            AppError::CloudDrive("授权页面缺少 bdstoken，请在浏览器中登录百度网盘后重试".into())
-        })?;
-        let client_id = extract_html_field(&authorize, "client_id")
-            .ok_or_else(|| AppError::CloudDrive("授权页面缺少 client_id".into()))?;
-        log::info!("cloud-drive: authorize grant form found (bdstoken/client_id extracted)");
-        let form = format!(
-            "grant_permissions_arr={}&bdstoken={}&client_id={}&response_type={}&display={}&grant_permissions={}",
-            urlencoding::encode("netdisk"),
-            urlencoding::encode(&bdstoken),
-            urlencoding::encode(&client_id),
-            urlencoding::encode("token"),
-            urlencoding::encode("page"),
-            urlencoding::encode("basic,netdisk"),
-        );
-        let grant = client
-            .post(&url)
-            .header("Cookie", cookie)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(form)
-            .send()
-            .await
-            .map_err(|e| AppError::CloudDrive(format!("提交授权确认失败: {e}")))?;
-        log::info!("cloud-drive: authorize grant POST status={}", grant.status().as_u16());
-
-        let confirm = client
-            .get(&url)
-            .header("Cookie", cookie)
-            .send()
-            .await
-            .map_err(|e| AppError::CloudDrive(format!("重新请求授权失败: {e}")))?;
-        let confirm = confirm
-            .text()
-            .await
-            .map_err(|e| AppError::CloudDrive(format!("读取授权响应失败: {e}")))?;
-        log::info!(
-            "cloud-drive: authorize confirm resp (truncated): {}",
-            &confirm[..confirm.len().min(300)]
-        );
-        if let Some(token) = extract_access_token(&confirm) {
-            return Ok(token);
-        }
-    } else {
-        log::info!("cloud-drive: authorize resp has no grant form (page may be login/error page)");
+    if refresh.is_empty() {
+        return Err(AppError::CloudDrive(
+            "access_token 已过期且无 refresh_token，请重新获取并填入".into(),
+        ));
     }
+    refresh_access_token(app, &refresh).await
+}
 
-    Err(AppError::CloudDrive(
-        "无法获取百度网盘访问令牌，请刷新网盘页面后重试".into(),
+/// Renew access_token using the permanent refresh_token.
+async fn refresh_access_token(app: &AppHandle, refresh: &str) -> Result<String, AppError> {
+    let client = http_client()?;
+    let resp = client
+        .post(OAUTH_TOKEN_URL)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh),
+            ("client_id", OAUTH_CLIENT_ID),
+            ("client_secret", OAUTH_CLIENT_SECRET),
+        ])
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("刷新 access_token 失败: {e}")))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("解析 token 响应失败: {e}")))?;
+    let access = json["access_token"]
+        .as_str()
+        .ok_or_else(|| AppError::CloudDrive("token 响应缺少 access_token".into()))?
+        .to_string();
+    let new_refresh = json["refresh_token"].as_str().unwrap_or("").to_string();
+    let expires_in = json["expires_in"].as_u64().unwrap_or(25 * 24 * 3600);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    crate::commands::baidu_drive::save_oauth_tokens(app, &access, &new_refresh, now + expires_in)?;
+    Ok(access)
+}
+
+/// Save a user-provided refresh_token: exchange it for a fresh access_token
+/// via Baidu's token API and persist both (so future renewals are automatic).
+#[tauri::command]
+pub async fn cloud_drive_baidu_save_token(
+    app: AppHandle,
+    token_or_code: String,
+) -> Result<String, AppError> {
+    let input = token_or_code.trim();
+    if input.is_empty() {
+        return Err(AppError::CloudDrive("请输入 refresh_token".into()));
+    }
+    let access = refresh_access_token(&app, input).await?;
+    Ok(format!("已用 refresh_token 换取并保存 access_token（{access}）"))
+}
+
+/// The OAuth authorize URL (QR login) the user opens to obtain a code/token.
+#[tauri::command]
+pub fn cloud_drive_baidu_oauth_url() -> Result<String, AppError> {
+    Ok(format!(
+        "{OAUTH_AUTHORIZE_URL}?response_type=code&client_id={OAUTH_CLIENT_ID}&redirect_uri={OAUTH_REDIRECT_URI}&scope=basic,netdisk&qrcode=1"
     ))
 }
 
-fn extract_access_token(body: &str) -> Option<String> {
-    let needle = "access_token=";
-    let start = body.find(needle)?;
-    let rest = &body[start + needle.len()..];
-    let end = rest
-        .find(|c: char| c == '&' || c == '"' || c == '\'' || c == '<' || c == '>')
-        .unwrap_or(rest.len());
-    if end == 0 {
-        return None;
-    }
-    Some(rest[..end].to_string())
-}
-
-/// Extract a hidden form field value like `name="bdstoken" value="..."`.
-fn extract_html_field(html: &str, name: &str) -> Option<String> {
-    let needle = format!("name=\"{name}\"");
-    let start = html.find(&needle)?;
-    let tail = &html[start..];
-    let value_start = tail.find("value=\"")? + "value=\"".len();
-    let value_end = tail[value_start..].find('"')? + value_start;
-    Some(tail[value_start..value_end].to_string())
+/// Whether an authorized session exists (access_token present).
+#[tauri::command]
+pub fn cloud_drive_baidu_oauth_status(app: AppHandle) -> Result<bool, AppError> {
+    Ok(crate::commands::baidu_drive::has_oauth(&app))
 }
 
 /// Expand checked folders into their contained files (recursively, mirroring

@@ -3,38 +3,19 @@
  * Cloud drive (网盘) entry page.
  *
  * - Baidu Netdisk (应用内): self-hosted UI rendered by BaiduDriveApp.vue, the
- *   Rust backend talks to Baidu's APIs (QR login -> list -> download).
- * - Baidu Netdisk (页面内): full-screen navigation mode on the main webview
- *   (injected back/download buttons).
+ *   Rust backend talks to Baidu's open APIs (OAuth access_token -> list -> download).
  * - Quark / 115 open their web versions in the default browser.
  */
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NIcon } from 'naive-ui'
 import { CloudOutline, AlbumsOutline, FolderOpenOutline, ChevronBackOutline, ChevronBack } from '@vicons/ionicons5'
-import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { useAppMessage } from '@/composables/useAppMessage'
 import BaiduDriveApp from './baidu/BaiduDriveApp.vue'
 
 const { t } = useI18n()
-const message = useAppMessage()
 
-const PAN_MAIN_URL = 'https://pan.baidu.com/disk/main'
 const mode = ref<'cards' | 'baidu-app'>('cards')
-
-async function openBaiduWeb() {
-  // Full-screen navigation mode: reuse the MAIN window's webview by navigating
-  // the whole app page to Baidu Netdisk. Rust drives the navigation and keeps
-  // injecting the bridge script (download + back button).
-  try {
-    await invoke('cloud_drive_baidu_nav_open', { url: PAN_MAIN_URL })
-  } catch (err) {
-    console.error('cloud-drive: nav open failed', err)
-    const msg = err instanceof Error ? err.message : String(err)
-    message.error(msg || t('cloudDrive.openFailed'))
-  }
-}
 
 async function openQuark() {
   await openUrl('https://pan.quark.cn').catch((e) => console.error('cloud-drive: open quark failed', e))
@@ -61,16 +42,6 @@ async function open115() {
           <span class="drive-card__action">
             <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
             {{ t('cloudDrive.openApp') }}
-          </span>
-        </button>
-
-        <button type="button" class="drive-card drive-card--baidu" @click="openBaiduWeb">
-          <NIcon :size="34" aria-hidden="true"><CloudOutline /></NIcon>
-          <span class="drive-card__name">{{ t('cloudDrive.baiduNav') }}</span>
-          <span class="drive-card__desc">{{ t('cloudDrive.baiduNavDesc') }}</span>
-          <span class="drive-card__action">
-            <NIcon :size="15" aria-hidden="true"><ChevronBackOutline /></NIcon>
-            {{ t('cloudDrive.openInPage') }}
           </span>
         </button>
 
