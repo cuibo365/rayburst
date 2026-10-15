@@ -145,7 +145,9 @@ pub async fn cloud_drive_baidu_qrcode(_app: AppHandle) -> Result<BaiduQrcode, Ap
         .map_err(|e| AppError::CloudDrive(format!("读取二维码响应失败: {e}")))?;
     log::info!("cloud-drive: getqrcode resp (truncated): {}", &text[..text.len().min(400)]);
 
-    // Flat shape: {"imgurl":"passport.baidu.com/v2/api/qrcode?sign=...","errno":0,"sign":"..."}
+    // The endpoint replies in JSONP (`tangram_guid_<ts>({...})`) when a
+    // `callback` param is present; strip the wrapper before parsing. Inner
+    // shape is flat: {"imgurl":"passport.baidu.com/v2/api/qrcode?sign=...","errno":0,"sign":"..."}
     #[derive(Deserialize)]
     struct Raw {
         #[serde(default)]
@@ -157,7 +159,7 @@ pub async fn cloud_drive_baidu_qrcode(_app: AppHandle) -> Result<BaiduQrcode, Ap
         #[serde(default)]
         code_string: Option<String>,
     }
-    let raw: Raw = serde_json::from_str(&text)
+    let raw: Raw = serde_json::from_str(&extract_jsonp(&text))
         .map_err(|e| AppError::CloudDrive(format!("解析二维码响应失败: {e}")))?;
     if raw.errno.unwrap_or(-1) != 0 {
         return Err(AppError::CloudDrive(format!(
