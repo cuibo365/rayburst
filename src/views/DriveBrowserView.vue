@@ -26,6 +26,8 @@ interface DriveFile {
   isdir: boolean
   mtime: number
   category: number
+  /** Universal string id: Baidu decimal fs_id; Quark 32-char hex fid. */
+  id: string
 }
 
 interface CloudStorage {
@@ -54,10 +56,10 @@ const crumbSegs = computed(() => browseStack.value.map((x) => x.name))
 const files = ref<DriveFile[]>([])
 const loading = ref(false)
 const loadError = ref('')
-const selected = ref<Set<number>>(new Set())
+const selected = ref<Set<string>>(new Set())
 const downloading = ref(false)
-/** fs_id currently being submitted by its row button, to disable just that row. */
-const downloadingId = ref<number | null>(null)
+/** Item id currently being submitted by its row button, to disable just that row. */
+const downloadingId = ref<string | null>(null)
 
 const isRoot = computed(() => activeStorage.value === null)
 const currentPath = computed(() => {
@@ -70,7 +72,7 @@ const currentKey = computed(() => {
   if (browseStack.value.length === 0) return rootPath.value
   return browseStack.value[browseStack.value.length - 1].key
 })
-const selectedFiles = computed(() => files.value.filter((f) => selected.value.has(f.fs_id)))
+const selectedFiles = computed(() => files.value.filter((f) => selected.value.has(f.id)))
 /** Only enabled storages are browsable, so disabled ones are hidden here.
  *  (The storage manager page still lists them so they can be re-enabled.) */
 const visibleStorages = computed(() => storages.value.filter((s) => !s.disabled))
@@ -235,8 +237,8 @@ function enterDir(f: DriveFile) {
 
 function toggle(f: DriveFile) {
   const s = new Set(selected.value)
-  if (s.has(f.fs_id)) s.delete(f.fs_id)
-  else s.add(f.fs_id)
+  if (s.has(f.id)) s.delete(f.id)
+  else s.add(f.id)
   selected.value = s
 }
 
@@ -273,7 +275,7 @@ async function startDownload() {
 /** Download a single row (folder contents are expanded by the backend). */
 async function downloadOne(f: DriveFile) {
   if (!activeStorage.value || downloadingId.value !== null) return
-  downloadingId.value = f.fs_id
+  downloadingId.value = f.id
   try {
     await submitDownload([f], () => `已添加「${f.name}」到下载队列`)
   } catch (err) {
@@ -392,14 +394,9 @@ onMounted(async () => {
             </tr>
           </tbody>
           <tbody v-else>
-            <tr
-              v-for="f in files"
-              :key="f.fs_id"
-              class="drive-row"
-              :class="{ 'drive-row--sel': selected.has(f.fs_id) }"
-            >
+            <tr v-for="f in files" :key="f.id" class="drive-row" :class="{ 'drive-row--sel': selected.has(f.id) }">
               <td class="drive-col-check">
-                <NCheckbox :checked="selected.has(f.fs_id)" @update:checked="toggle(f)" />
+                <NCheckbox :checked="selected.has(f.id)" @update:checked="toggle(f)" />
               </td>
               <td>
                 <button type="button" class="drive-name" :class="{ 'drive-name--dir': f.isdir }" @click="enterDir(f)">
@@ -417,8 +414,8 @@ onMounted(async () => {
                 <NButton
                   size="tiny"
                   secondary
-                  :loading="downloadingId === f.fs_id"
-                  :disabled="downloadingId !== null && downloadingId !== f.fs_id"
+                  :loading="downloadingId === f.id"
+                  :disabled="downloadingId !== null && downloadingId !== f.id"
                   @click="downloadOne(f)"
                 >
                   <template #icon

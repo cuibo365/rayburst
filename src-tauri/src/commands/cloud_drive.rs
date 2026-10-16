@@ -23,6 +23,10 @@ pub struct CloudDriveFile {
     /// Baidu file category (1 video, 2 audio, 3 image, 4 doc, 5 app, 6 other, 7 torrent).
     #[serde(default)]
     pub category: u32,
+    /// Universal string item id. Baidu: decimal fs_id; Quark: the 32-char hex
+    /// fid (does not fit u64). Selection and download lookups use this.
+    #[serde(default)]
+    pub id: String,
     /// Relative dir chain rooted at the checked (level-1) item, e.g. `A/B` for
     /// a file inside checked folder `A/B`. Empty for level-1 files (flat
     /// download into the default dir). Populated by `expand_folders`.

@@ -331,6 +331,7 @@ impl BaiduDriver {
                     isdir: f.isdir != 0,
                     mtime: f.mtime,
                     category: f.category,
+                    id: f.fs_id.to_string(),
                     rel_path: String::new(),
                 });
             }
@@ -578,21 +579,20 @@ impl QuarkDriver {
                         skipped += 1;
                         continue;
                     };
-                    let Ok(fs_id) = fid_str.parse::<u64>() else {
-                        skipped += 1;
-                        continue;
-                    };
+                    // Quark fids are 32-char hex strings (do not fit u64), so
+                    // fs_id is 0 and the universal `id` carries the fid.
                     let is_file = item["file"]
                         .as_bool()
                         .unwrap_or_else(|| item["file"].as_u64().map(|v| v != 0).unwrap_or(false));
                     out.push(crate::commands::CloudDriveFile {
-                        fs_id,
+                        fs_id: 0,
                         name: html_unescape(item["file_name"].as_str().unwrap_or("")),
                         size: item["size"].as_u64().unwrap_or(0),
                         path: fid_str.clone(),
                         isdir: !is_file,
                         mtime: (item["updated_at"].as_i64().unwrap_or(0).max(0) / 1000) as u64,
                         category: item["category"].as_u64().unwrap_or(0) as u32,
+                        id: fid_str.clone(),
                         rel_path: String::new(),
                     });
                 }
@@ -636,7 +636,7 @@ impl QuarkDriver {
         for chunk in files.chunks(100) {
             for attempt in 0..QUARK_MAX_ATTEMPTS {
                 let client = Self::http_client()?;
-                let fids: Vec<String> = chunk.iter().map(|f| f.fs_id.to_string()).collect();
+                let fids: Vec<String> = chunk.iter().map(|f| f.id.clone()).collect();
                 let body = serde_json::json!({ "fids": fids });
                 let url = format!("{QUARK_API}/file/download?pr=ucpro&fr=pc");
                 let req_cookie = self.addition.cookie.clone();
