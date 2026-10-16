@@ -1317,3 +1317,193 @@ pub async fn cloud_drive_share_download(
     Ok(submit_links(&app, &links, default_dir.as_deref()).await)
 }
 
+
+// ============================== quark qrcode login (扫码获取 Cookie) ==============================
+//
+// Mirrors xiaoya-alist's `quark_cookie.py`: generates a QR code via the
+// uop.quark.cn CAS endpoints, polls until the Quark app scans it, then trades
+// the service ticket for account cookies + the drive-pc `__puus` cookie.
+
+const QUARK_UOP_CAS: &str = "https://uop.quark.cn/cas/ajax";
+const QUARK_UOP_CLIENT_ID: &str = "532";
+
+/// Generated QR login session handed to the frontend for display/polling.
+#[derive(serde::Serialize)]
+pub struct QuarkQrcodeCreated {
+    pub token: String,
+    pub qrcode_svg: String,
+}
+
+/// Poll result. `state`: success / pending / expired / error.
+#[derive(serde::Serialize)]
+pub struct QuarkQrcodeStatus {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cookie: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+fn quark_uop_request_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// Step 1: create a QR login token and render the QR code as SVG.
+#[tauri::command]
+pub async fn cloud_drive_quark_qrcode_create() -> Result<QuarkQrcodeCreated, AppError> {
+    let client = reqwest::Client::builder()
+        .user_agent(QUARK_UA)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
+    let url = format!(
+        "{QUARK_UOP_CAS}/getTokenForQrcodeLogin?client_id={QUARK_UOP_CLIENT_ID}&v=1.2&request_id={}",
+        quark_uop_request_id()
+    );
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("请求夸克登录二维码失败: {e}")))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("解析夸克登录二维码响应失败: {e}")))?;
+    let token = json["data"]["members"]["token"]
+        .as_str()
+        .ok_or_else(|| AppError::CloudDrive("夸克登录二维码响应缺少 token".into()))?
+        .to_string();
+    let qr_content = format!(
+        "https://su.quark.cn/4_eMHBJ?token={token}&client_id={QUARK_UOP_CLIENT_ID}&ssb=weblogin&uc_param_str=&uc_biz_str=S%3Acustom%7COPT%3ASAREA%400%7COPT%3AIMMERSIVE%401%7COPT%3ABACK_BTN_STYLE%400"
+    );
+    let code = qrcode::QrCode::new(qr_content.as_bytes())
+        .map_err(|e| AppError::CloudDrive(format!("生成二维码失败: {e}")))?;
+    let qrcode_svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(320, 320)
+        .build();
+    Ok(QuarkQrcodeCreated { token, qrcode_svg })
+}
+
+/// Collect `Set-Cookie` response headers into an ordered name=value list.
+fn collect_set_cookie(headers: &reqwest::header::HeaderMap, out: &mut Vec<(String, String)>) {
+    for value in headers.get_all(reqwest::header::SET_COOKIE) {
+        let Ok(s) = value.to_str() else { continue };
+        let Some((name, rest)) = s.split_once('=') else { continue };
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let value = rest.split(';').next().unwrap_or("").trim().to_string();
+        // Later responses win over earlier ones.
+        if let Some(slot) = out.iter_mut().find(|(n, _)| *n == name) {
+            slot.1 = value;
+        } else {
+            out.push((name, value));
+        }
+    }
+}
+
+/// Step 2: poll the scan status; on success returns the merged cookie string
+/// (account cookies from `pan.quark.cn/account/info` + drive-pc `__puus`).
+#[tauri::command]
+pub async fn cloud_drive_quark_qrcode_status(
+    token: String,
+) -> Result<QuarkQrcodeStatus, AppError> {
+    let client = reqwest::Client::builder()
+        .user_agent(QUARK_UA)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
+    let url = format!(
+        "{QUARK_UOP_CAS}/getServiceTicketByQrcodeToken?client_id={QUARK_UOP_CLIENT_ID}&v=1.2&token={}&request_id={}",
+        urlencoding::encode(&token),
+        quark_uop_request_id()
+    );
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("查询夸克登录状态失败: {e}")))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("解析夸克登录状态失败: {e}")))?;
+    let status = json["status"].as_i64().unwrap_or(-1);
+    match status {
+        2000000 => {
+            let ticket = json["data"]["members"]["service_ticket"]
+                .as_str()
+                .ok_or_else(|| AppError::CloudDrive("扫码成功但缺少 service_ticket".into()))?;
+            // Trade the ticket for account cookies (USID/USESSION/...).
+            let info_url = format!(
+                "https://pan.quark.cn/account/info?st={}&lw=scan",
+                urlencoding::encode(ticket)
+            );
+            let info = client
+                .get(&info_url)
+                .header("Referer", "https://pan.quark.cn")
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("换取夸克账号 cookie 失败: {e}")))?;
+            if !info.status().is_success() {
+                return Ok(QuarkQrcodeStatus {
+                    state: "error".into(),
+                    cookie: None,
+                    message: Some(format!("换取夸克账号 cookie 失败（HTTP {}）", info.status())),
+                });
+            }
+            let mut cookies: Vec<(String, String)> = Vec::new();
+            collect_set_cookie(info.headers(), &mut cookies);
+            // Drive-pc config reissues the session cookie (`__puus`); it must
+            // carry the account cookies from the previous step.
+            let account_cookie = cookies
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let config_resp = client
+                .get("https://drive-pc.quark.cn/1/clouddrive/config?pr=ucpro&fr=pc&uc_param_str=")
+                .header("Referer", "https://pan.quark.cn")
+                .header("Cookie", &account_cookie)
+                .send()
+                .await;
+            match config_resp {
+                Ok(r) => collect_set_cookie(r.headers(), &mut cookies),
+                Err(e) => log::warn!("cloud-drive: 获取 __puus 失败: {e}"),
+            }
+            if cookies.is_empty() {
+                return Ok(QuarkQrcodeStatus {
+                    state: "error".into(),
+                    cookie: None,
+                    message: Some("未从登录响应中获取到任何 cookie".into()),
+                });
+            }
+            let cookie_str = cookies
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            Ok(QuarkQrcodeStatus {
+                state: "success".into(),
+                cookie: Some(cookie_str),
+                message: None,
+            })
+        }
+        50004002 => Ok(QuarkQrcodeStatus {
+            state: "expired".into(),
+            cookie: None,
+            message: Some("二维码已过期，请刷新后重试".into()),
+        }),
+        50004001 => Ok(QuarkQrcodeStatus {
+            state: "pending".into(),
+            cookie: None,
+            message: None,
+        }),
+        other => Ok(QuarkQrcodeStatus {
+            state: "error".into(),
+            cookie: None,
+            message: Some(format!("夸克返回未知状态: {other}")),
+        }),
+    }
+}

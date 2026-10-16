@@ -4,7 +4,7 @@
  * Adding a Baidu Netdisk storage fills client_id/client_secret with defaults;
  * the refresh_token field carries an "获取" button that opens the OAuth page.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   NButton,
   NCheckbox,
@@ -177,6 +177,66 @@ function onDriverChange() {
   form.value.share_url = ''
   form.value.passcode = ''
 }
+
+// --- quark qrcode login (扫码获取 Cookie) ---
+const qrDialog = ref(false)
+const qrSvg = ref('')
+const qrToken = ref('')
+const qrError = ref('')
+const qrGenerating = ref(false)
+let qrTimer: number | null = null
+
+function stopQrPoll() {
+  if (qrTimer !== null) {
+    window.clearInterval(qrTimer)
+    qrTimer = null
+  }
+}
+
+async function genQrcode() {
+  stopQrPoll()
+  qrError.value = ''
+  qrGenerating.value = true
+  try {
+    const r = await invoke<{ token: string; qrcode_svg: string }>('cloud_drive_quark_qrcode_create')
+    qrToken.value = r.token
+    qrSvg.value = r.qrcode_svg
+    qrTimer = window.setInterval(async () => {
+      if (!qrToken.value) return
+      try {
+        const r = await invoke<{ state: string; cookie?: string; message?: string }>(
+          'cloud_drive_quark_qrcode_status',
+          { token: qrToken.value },
+        )
+        if (r.state === 'success' && r.cookie) {
+          form.value.cookie = r.cookie
+          stopQrPoll()
+          qrDialog.value = false
+          message.success('扫码成功，Cookie 已自动填入')
+        } else if (r.state === 'expired' || r.state === 'error') {
+          stopQrPoll()
+          qrError.value = r.message || '扫码失败，请刷新二维码重试'
+        }
+      } catch {
+        // transient network error: keep polling
+      }
+    }, 2000)
+  } catch (err) {
+    qrError.value = errMsg(err)
+  } finally {
+    qrGenerating.value = false
+  }
+}
+
+function openQrcode() {
+  qrSvg.value = ''
+  qrToken.value = ''
+  qrError.value = ''
+  qrDialog.value = true
+  void genQrcode()
+}
+
+onUnmounted(stopQrPoll)
 
 async function openAuthorize() {
   const clientId = form.value.client_id.trim() || DEFAULT_CLIENT_ID
@@ -441,16 +501,21 @@ onMounted(async () => {
 
         <template v-else-if="isQuark">
           <NFormItem label="Cookie">
-            <NInput
-              v-model:value="form.cookie"
-              type="textarea"
-              :autosize="{ minRows: 4, maxRows: 8 }"
-              placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
-            />
+            <div class="storage-token-row storage-token-row--stack">
+              <NInput
+                v-model:value="form.cookie"
+                type="textarea"
+                :autosize="{ minRows: 4, maxRows: 8 }"
+                placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
+              />
+              <NButton size="small" secondary class="storage-token-get" @click="openQrcode"> 扫码获取 </NButton>
+            </div>
           </NFormItem>
           <p class="storage-quark-tip">
             获取方式：浏览器登录 <code>pan.quark.cn</code> → 按 F12 打开开发者工具 → Application → Cookies →
-            全选复制（形如 <code>xxx=yyy; zzz=aaa</code>）。Cookie 失效后需重新复制更新。
+            全选复制（形如 <code>xxx=yyy; zzz=aaa</code>）。Cookie 失效后需重新复制更新；也可用<strong
+              >夸克 App 扫码</strong
+            >自动获取。
           </p>
           <NFormItem label="root_id（挂载根目录 fid）">
             <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
@@ -465,17 +530,21 @@ onMounted(async () => {
             <NInput v-model:value="form.passcode" placeholder="分享链接未带 pwd 时使用此提取码" />
           </NFormItem>
           <NFormItem label="Cookie">
-            <NInput
-              v-model:value="form.cookie"
-              type="textarea"
-              :autosize="{ minRows: 4, maxRows: 8 }"
-              placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
-            />
+            <div class="storage-token-row storage-token-row--stack">
+              <NInput
+                v-model:value="form.cookie"
+                type="textarea"
+                :autosize="{ minRows: 4, maxRows: 8 }"
+                placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
+              />
+              <NButton size="small" secondary class="storage-token-get" @click="openQrcode"> 扫码获取 </NButton>
+            </div>
           </NFormItem>
           <p class="storage-quark-tip">
             分享浏览不需要登录，但<strong>下载需要 Cookie</strong>（夸克分享文件需登录态才能拿下载地址）。
-            获取方式：浏览器登录 <code>pan.quark.cn</code> → F12 → Application → Cookies → 全选复制。
-            分享链接若带提取码（<code>?pwd=xxxx</code>）请一并粘贴。
+            获取方式：浏览器登录 <code>pan.quark.cn</code> → F12 → Application → Cookies → 全选复制；也可用<strong
+              >夸克 App 扫码</strong
+            >自动获取。 分享链接若带提取码（<code>?pwd=xxxx</code>）请一并粘贴。
           </p>
         </template>
 
@@ -487,6 +556,32 @@ onMounted(async () => {
         <div class="storage-dialog-actions">
           <NButton secondary @click="showDialog = false">取消</NButton>
           <NButton type="primary" :loading="saving" @click="save">保存</NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 夸克扫码获取 Cookie -->
+    <NModal
+      v-model:show="qrDialog"
+      preset="card"
+      title="夸克扫码获取 Cookie"
+      class="storage-dialog"
+      :style="{ width: '360px' }"
+      :bordered="false"
+      @after-leave="stopQrPoll"
+    >
+      <p class="storage-quark-tip">
+        请使用<strong>夸克 App</strong> 扫码登录（手机端需已登录账号），扫码成功后将自动填入 Cookie。
+      </p>
+      <div class="qr-box">
+        <img v-if="qrSvg" :src="'data:image/svg+xml;utf8,' + encodeURIComponent(qrSvg)" alt="夸克登录二维码" />
+        <NSpin v-else :show="qrGenerating" class="qr-loading" />
+      </div>
+      <div v-if="qrError" class="qr-error">{{ qrError }}</div>
+      <template #footer>
+        <div class="storage-dialog-actions">
+          <NButton secondary @click="qrDialog = false">关闭</NButton>
+          <NButton secondary :loading="qrGenerating" @click="genQrcode">刷新二维码</NButton>
         </div>
       </template>
     </NModal>
@@ -569,8 +664,34 @@ onMounted(async () => {
   gap: 8px;
   width: 100%;
 }
+.storage-token-row--stack {
+  flex-direction: column;
+}
 .storage-token-get {
   flex: none;
+  align-self: flex-end;
+}
+.qr-box {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 240px;
+  padding: 12px 0;
+}
+.qr-box img {
+  width: 240px;
+  height: 240px;
+  image-rendering: pixelated;
+  border-radius: 8px;
+  background: #fff;
+}
+.qr-loading {
+  padding: 90px 0;
+}
+.qr-error {
+  font-size: 12px;
+  color: var(--m3-error, #e5484d);
+  margin-top: 4px;
 }
 .storage-quark-tip {
   margin: -4px 0 10px;
