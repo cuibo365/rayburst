@@ -13,6 +13,7 @@ use crate::database::{CloudStorage, Database, DatabaseState};
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
+use tauri_plugin_store::StoreExt;
 
 pub const BAIDU_DEFAULT_CLIENT_ID: &str = "hq9yQ9w9kR4YHj1kyYafLygVocobh7Sf";
 pub const BAIDU_DEFAULT_CLIENT_SECRET: &str = "YH2VpZcFJHYNnV6vLfHQXDBhcE7ZChyE";
