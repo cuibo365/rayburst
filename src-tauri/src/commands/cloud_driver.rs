@@ -23,6 +23,15 @@ const BAIDU_FILE_METAS_URL: &str = "https://pan.baidu.com/rest/2.0/xpan/multimed
 const USER_AGENT: &str = "pan.baidu.com";
 const PAN_REFERER: &str = "https://pan.baidu.com/";
 
+/// Quark drive API (mirrors alist `drivers/quark_uc`).
+const QUARK_API: &str = "https://drive.quark.cn/1/clouddrive";
+const QUARK_REFERER: &str = "https://pan.quark.cn";
+const QUARK_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch";
+/// Session cookie reissued by the server; expires in ~3h.
+const QUARK_PUUS_COOKIE: &str = "__puus";
+/// Max attempts per API call (1 original + 1 after a session-cookie refresh).
+const QUARK_MAX_ATTEMPTS: usize = 2;
+
 /// Baidu Netdisk driver addition (persisted in `cloud_storages.addition`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaiduAddition {
@@ -69,9 +78,47 @@ impl BaiduAddition {
     }
 }
 
+/// Quark Netdisk driver addition (persisted in `cloud_storages.addition`).
+/// Quark has no public OAuth; authentication is the web-session cookie copied
+/// from pan.quark.cn, matching alist's quark driver. The `__puus` session
+/// cookie is refreshed on demand by the driver and persisted back here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuarkAddition {
+    pub cookie: String,
+    /// Browse root; `0` is the drive root, a sub-directory fid works too.
+    #[serde(default = "default_quark_root")]
+    pub root_id: String,
+}
+
+fn default_quark_root() -> String {
+    "0".into()
+}
+
+impl QuarkAddition {
+    pub fn parse(json: &str) -> Result<Self, AppError> {
+        serde_json::from_str(json)
+            .map_err(|e| AppError::CloudDrive(format!("解析驱动配置失败: {e}")))
+    }
+    fn to_json(&self) -> Result<String, AppError> {
+        serde_json::to_string(self)
+            .map_err(|e| AppError::CloudDrive(format!("序列化驱动配置失败: {e}")))
+    }
+}
+
+/// Best-effort HTML unescape for names returned by Quark.
+fn html_unescape(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+}
+
 /// A materialized driver instance (enum dispatch keeps this dependency-free).
 pub enum CloudDriver {
     Baidu(BaiduDriver),
+    Quark(QuarkDriver),
 }
 
 impl CloudDriver {
@@ -80,6 +127,10 @@ impl CloudDriver {
             "baidu_netdisk" => Ok(CloudDriver::Baidu(BaiduDriver {
                 id: storage.id,
                 addition: BaiduAddition::parse(&storage.addition)?,
+            })),
+            "quark" => Ok(CloudDriver::Quark(QuarkDriver {
+                id: storage.id,
+                addition: QuarkAddition::parse(&storage.addition)?,
             })),
             other => Err(AppError::CloudDrive(format!(
                 "不支持的驱动类型：{other}"
@@ -90,37 +141,33 @@ impl CloudDriver {
     pub fn driver_name(&self) -> &'static str {
         match self {
             CloudDriver::Baidu(_) => "baidu_netdisk",
+            CloudDriver::Quark(_) => "quark",
         }
     }
 
-    /// Resolve a fresh access_token (renew and persist if expired).
-    pub async fn access_token(&mut self, db: &Database) -> Result<String, AppError> {
-        match self {
-            CloudDriver::Baidu(d) => d.ensure_access_token(db).await,
-        }
-    }
-
-    /// List the children of `path` (absolute, including the mount root).
+    /// List the children of `path`. For Baidu this is an absolute drive path
+    /// (including the mount root); for Quark it is a directory fid (`0` = root).
     pub async fn list(
         &mut self,
         db: &Database,
         path: &str,
     ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
-        let token = self.access_token(db).await?;
         let result = match self {
-            CloudDriver::Baidu(d) => d.list(path, &token).await,
+            CloudDriver::Baidu(d) => {
+                let token = d.ensure_access_token(db).await?;
+                d.list(path, &token).await
+            }
+            CloudDriver::Quark(d) => d.list(db, path).await,
         };
         match self {
-            CloudDriver::Baidu(d) => {
-                match &result {
-                    Ok(_) => {
-                        d.set_status(db, "正常").await;
-                    }
-                    Err(e) => {
-                        d.set_status(db, &format!("错误: {e}")).await;
-                    }
-                }
-            }
+            CloudDriver::Baidu(d) => match &result {
+                Ok(_) => d.set_status(db, "正常").await,
+                Err(e) => d.set_status(db, &format!("错误: {e}")).await,
+            },
+            CloudDriver::Quark(d) => match &result {
+                Ok(_) => d.set_status(db, "正常").await,
+                Err(e) => d.set_status(db, &format!("错误: {e}")).await,
+            },
         }
         result
     }
@@ -294,11 +341,13 @@ impl BaiduDriver {
     }
 
     /// Fetch download links for files; dlink carries the access_token (403 guard).
+    /// Returns (file, url, aria2 headers) so the caller submits exactly what
+    /// each driver needs (UA/Referer; Quark additionally requires the cookie).
     pub async fn get_dlinks(
         &mut self,
         db: &Database,
         files: &[crate::commands::CloudDriveFile],
-    ) -> Result<Vec<(crate::commands::CloudDriveFile, String)>, AppError> {
+    ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
         let token = self.ensure_access_token(db).await?;
         let client = Self::http_client()?;
         let mut result = Vec::new();
@@ -350,7 +399,14 @@ impl BaiduDriver {
                         } else {
                             format!("{dlink}&access_token={token}")
                         };
-                        result.push((file.clone(), dlink));
+                        result.push((
+                            file.clone(),
+                            dlink,
+                            vec![
+                                format!("User-Agent: {USER_AGENT}"),
+                                format!("Referer: {PAN_REFERER}"),
+                            ],
+                        ));
                     }
                 }
             }
@@ -362,9 +418,253 @@ impl BaiduDriver {
     }
 }
 
+// ============================== Quark driver ==============================
+
+/// Quark Netdisk driver: web-session cookie auth + fid-based list and download
+/// (mirrors alist `drivers/quark_uc`). The `__puus` session cookie is refreshed
+/// on demand: a failed call strips it and hits /config so the server reissues a
+/// fresh one, then persists the updated cookie to the storage row.
+pub struct QuarkDriver {
+    id: i64,
+    addition: QuarkAddition,
+}
+
+impl QuarkDriver {
+    fn http_client() -> Result<reqwest::Client, AppError> {
+        reqwest::Client::builder()
+            .user_agent(QUARK_UA)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
+    }
+
+    async fn persist(&self, db: &Database) -> Result<(), AppError> {
+        db.update_storage_addition(self.id, &self.addition.to_json()?)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_status(&self, db: &Database, status: &str) -> Result<(), AppError> {
+        db.set_storage_status(self.id, status).await
+    }
+
+    /// Cookie without the `__puus` session value.
+    fn strip_puus(cookie: &str) -> String {
+        cookie
+            .split(';')
+            .map(|p| p.trim())
+            .filter(|p| !p.starts_with(&format!("{QUARK_PUUS_COOKIE}=")))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    fn merge_puus(cookie: &str, new_puus: &str) -> String {
+        let stripped = Self::strip_puus(cookie);
+        if stripped.is_empty() {
+            format!("{QUARK_PUUS_COOKIE}={new_puus}")
+        } else {
+            format!("{stripped}; {QUARK_PUUS_COOKIE}={new_puus}")
+        }
+    }
+
+    /// Ask the server to reissue the session cookie: GET /config without
+    /// `__puus`. Persist the updated cookie and return it.
+    async fn refresh_session(&mut self, db: &Database) -> Result<(), AppError> {
+        let client = Self::http_client()?;
+        let stripped = Self::strip_puus(&self.addition.cookie);
+        let url = format!("{QUARK_API}/config?pr=ucpro&fr=pc");
+        let resp = client
+            .get(&url)
+            .header("Cookie", stripped)
+            .header("Referer", QUARK_REFERER)
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("刷新夸克会话失败: {e}")))?;
+        let new_puus = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|s| {
+                let pair = s.split(';').next().unwrap_or("");
+                let mut it = pair.splitn(2, '=');
+                match (it.next(), it.next()) {
+                    (Some(k), Some(v)) if k.trim() == QUARK_PUUS_COOKIE => Some(v.to_string()),
+                    _ => None,
+                }
+            });
+        match new_puus {
+            Some(p) => {
+                self.addition.cookie = Self::merge_puus(&self.addition.cookie, &p);
+                self.persist(db).await?;
+                Ok(())
+            }
+            None => Err(AppError::CloudDrive(
+                "夸克未下发新的会话 cookie，可能已完全失效，请重新获取 cookie".into(),
+            )),
+        }
+    }
+
+    /// Whether the provider envelope or HTTP status indicates the session
+    /// cookie is stale and worth one refresh+retry.
+    fn cookie_stale(status: reqwest::StatusCode, code: i64, message: &str) -> bool {
+        status == reqwest::StatusCode::FORBIDDEN
+            || status == reqwest::StatusCode::UNAUTHORIZED
+            || code != 0 && (message.contains("登录") || message.contains("token") || message.contains("cookie") || message.contains("登录状态"))
+    }
+
+    async fn list(
+        &mut self,
+        db: &Database,
+        fid: &str,
+    ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
+        const SIZE: usize = 100;
+        const MAX_PAGES: usize = 100; // 安全上限：最多 1 万文件，防异常死循环
+        let mut out = Vec::new();
+        let mut page = 1usize;
+        let mut total_hint: u64 = 0;
+        loop {
+            let mut page_ok = false;
+            for attempt in 0..QUARK_MAX_ATTEMPTS {
+                let client = Self::http_client()?;
+                let url = format!(
+                    "{QUARK_API}/file/sort?pdir_fid={}&_size={SIZE}&_fetch_total=1&fetch_all_file=1&fetch_risk_file_name=1&_page={page}&pr=ucpro&fr=pc",
+                    urlencoding::encode(fid)
+                );
+                let resp = client
+                    .get(&url)
+                    .header("Cookie", &self.addition.cookie)
+                    .header("Referer", QUARK_REFERER)
+                    .send()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("请求夸克文件列表失败: {e}")))?;
+                let status = resp.status();
+                let text = resp
+                    .text()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("读取夸克列表响应失败: {e}")))?;
+                let json: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|e| AppError::CloudDrive(format!("解析夸克列表失败: {e}")))?;
+                let code = json["code"].as_i64().unwrap_or(-1);
+                let message = json["message"].as_str().unwrap_or("");
+                if !status.is_success() || code != 0 {
+                    if attempt + 1 < QUARK_MAX_ATTEMPTS && Self::cookie_stale(status, code, message)
+                    {
+                        if self.refresh_session(db).await.is_ok() {
+                            continue; // retry the same page with the fresh cookie
+                        }
+                    }
+                    return Err(AppError::CloudDrive(format!(
+                        "夸克返回错误 code={code}: {}",
+                        if message.is_empty() { "未知错误" } else { message }
+                    )));
+                }
+                let list = json["data"]["list"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                for item in &list {
+                    let Some(fid_str) = item["fid"].as_str() else { continue };
+                    let Ok(fs_id) = fid_str.parse::<u64>() else { continue };
+                    out.push(crate::commands::CloudDriveFile {
+                        fs_id,
+                        name: html_unescape(item["file_name"].as_str().unwrap_or("")),
+                        size: item["size"].as_u64().unwrap_or(0),
+                        path: fid_str.to_string(),
+                        isdir: !item["file"].as_bool().unwrap_or(false),
+                        mtime: (item["updated_at"].as_i64().unwrap_or(0).max(0) / 1000) as u64,
+                        category: item["category"].as_u64().unwrap_or(0) as u32,
+                        rel_path: String::new(),
+                    });
+                }
+                let total = json["metadata"]["_total"].as_u64().unwrap_or(0);
+                if total > 0 {
+                    total_hint = total;
+                }
+                page_ok = true;
+                break;
+            }
+            if !page_ok {
+                // Both attempts exhausted without success; error already returned.
+                break;
+            }
+            // Next page? Quark reports the total in `metadata._total`; keep
+            // fetching until the current page covers it.
+            if page as u64 * SIZE as u64 >= total_hint || page >= MAX_PAGES {
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
+    }
+
+    /// Fetch download URLs: POST /file/download with the fids; the returned
+    /// URL is signed against the cookie used for the request, so the same
+    /// cookie snapshot must ride along in the aria2 headers.
+    pub async fn get_dlinks(
+        &mut self,
+        db: &Database,
+        files: &[crate::commands::CloudDriveFile],
+    ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
+        let mut result = Vec::new();
+        for chunk in files.chunks(100) {
+            for attempt in 0..QUARK_MAX_ATTEMPTS {
+                let client = Self::http_client()?;
+                let fids: Vec<String> = chunk.iter().map(|f| f.fs_id.to_string()).collect();
+                let body = serde_json::json!({ "fids": fids });
+                let url = format!("{QUARK_API}/file/download?pr=ucpro&fr=pc");
+                let req_cookie = self.addition.cookie.clone();
+                let resp = client
+                    .post(&url)
+                    .header("Cookie", &req_cookie)
+                    .header("Referer", QUARK_REFERER)
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("请求夸克下载地址失败: {e}")))?;
+                let status = resp.status();
+                let json: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("解析夸克下载地址失败: {e}")))?;
+                let code = json["code"].as_i64().unwrap_or(-1);
+                let message = json["message"].as_str().unwrap_or("");
+                if !status.is_success() || code != 0 {
+                    if attempt + 1 < QUARK_MAX_ATTEMPTS && Self::cookie_stale(status, code, message)
+                    {
+                        if self.refresh_session(db).await.is_ok() {
+                            continue;
+                        }
+                    }
+                    return Err(AppError::CloudDrive(format!(
+                        "获取夸克下载地址失败（code={code}）：{}",
+                        if message.is_empty() { "未知错误" } else { message }
+                    )));
+                }
+                let data = json["data"].as_array().cloned().unwrap_or_default();
+                let headers = vec![
+                    format!("User-Agent: {QUARK_UA}"),
+                    format!("Referer: {QUARK_REFERER}"),
+                    format!("Cookie: {req_cookie}"),
+                ];
+                for (i, item) in data.iter().enumerate() {
+                    let Some(url) = item["download_url"].as_str() else { continue };
+                    let Some(file) = chunk.get(i) else { continue };
+                    result.push((file.clone(), url.to_string(), headers.clone()));
+                }
+                break;
+            }
+        }
+        if result.is_empty() {
+            return Err(AppError::CloudDrive("未能获取任何夸克文件的下载地址".into()));
+        }
+        Ok(result)
+    }
+}
+
 // ============================== storage-scoped commands ==============================
 
-use crate::commands::cloud_drive::{resolve_download_dir, sanitize_dir_path, CloudDriveFile, CloudDriveResult};
+use crate::commands::cloud_drive::{resolve_download_dir, CloudDriveFile, CloudDriveResult};
 use crate::services::downloads::{submit, TaskInput};
 
 /// Recursively expand checked folders into contained files via the driver.
@@ -454,6 +754,7 @@ pub async fn cloud_drive_storage_download(
     }
     let links = match &mut driver {
         CloudDriver::Baidu(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::Quark(d) => d.get_dlinks(&db.0, &files).await?,
     };
 
     let default_dir: Option<String> = app
@@ -471,12 +772,9 @@ pub async fn cloud_drive_storage_download(
 
     let mut added = 0usize;
     let mut failed = 0usize;
-    for (file, dlink) in &links {
+    for (file, dlink, headers) in &links {
         let mut options = serde_json::json!({
-            "header": [
-                format!("User-Agent: {USER_AGENT}"),
-                format!("Referer: {PAN_REFERER}"),
-            ],
+            "header": headers,
             "out": file.name,
         });
         if let Some(dir) = default_dir

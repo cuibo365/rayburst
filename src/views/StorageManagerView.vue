@@ -37,15 +37,6 @@ interface CloudStorage {
   modified: string
 }
 
-interface BaiduAddition {
-  refresh_token: string
-  access_token?: string
-  token_expires_at?: number
-  root_path: string
-  client_id: string
-  client_secret: string
-}
-
 const DEFAULT_CLIENT_ID = 'hq9yQ9w9kR4YHj1kyYafLygVocobh7Sf'
 const DEFAULT_CLIENT_SECRET = 'YH2VpZcFJHYNnV6vLfHQXDBhcE7ZChyE'
 const CALLBACK_URL = 'https://alistgo.com/tool/baidu/callback'
@@ -85,7 +76,10 @@ async function ensureDbReady(): Promise<boolean> {
   return false
 }
 
-const DRIVERS = [{ label: '百度网盘', value: 'baidu_netdisk' }] as const
+const DRIVERS = [
+  { label: '百度网盘', value: 'baidu_netdisk' },
+  { label: '夸克网盘', value: 'quark' },
+] as const
 
 const message = useMessage()
 const storages = ref<CloudStorage[]>([])
@@ -102,6 +96,8 @@ const form = ref<{
   client_id: string
   client_secret: string
   root_path: string
+  cookie: string
+  root_id: string
   remark: string
 }>({
   mount_path: '',
@@ -110,11 +106,14 @@ const form = ref<{
   client_id: DEFAULT_CLIENT_ID,
   client_secret: DEFAULT_CLIENT_SECRET,
   root_path: '/',
+  cookie: '',
+  root_id: '0',
   remark: '',
 })
 
 const dialogTitle = computed(() => (editingId.value === null ? '添加存储' : '编辑存储'))
 const isBaidu = computed(() => form.value.driver === 'baidu_netdisk')
+const isQuark = computed(() => form.value.driver === 'quark')
 
 function resetForm() {
   editingId.value = null
@@ -125,6 +124,8 @@ function resetForm() {
     client_id: DEFAULT_CLIENT_ID,
     client_secret: DEFAULT_CLIENT_SECRET,
     root_path: '/',
+    cookie: '',
+    root_id: '0',
     remark: '',
   }
 }
@@ -136,28 +137,33 @@ function openAdd() {
 
 function openEdit(s: CloudStorage) {
   editingId.value = s.id
-  let addition: Partial<BaiduAddition> = {}
+  let addition: Record<string, unknown> = {}
   try {
-    addition = JSON.parse(s.addition) as Partial<BaiduAddition>
+    addition = JSON.parse(s.addition) as Record<string, unknown>
   } catch {
     addition = {}
   }
   form.value = {
     mount_path: s.mount_path,
     driver: s.driver,
-    refresh_token: addition.refresh_token ?? '',
-    client_id: addition.client_id ?? DEFAULT_CLIENT_ID,
-    client_secret: addition.client_secret ?? DEFAULT_CLIENT_SECRET,
-    root_path: addition.root_path ?? '/',
+    refresh_token: (addition.refresh_token as string) ?? '',
+    client_id: (addition.client_id as string) ?? DEFAULT_CLIENT_ID,
+    client_secret: (addition.client_secret as string) ?? DEFAULT_CLIENT_SECRET,
+    root_path: (addition.root_path as string) ?? '/',
+    cookie: (addition.cookie as string) ?? '',
+    root_id: (addition.root_id as string) ?? '0',
     remark: s.remark,
   }
   showDialog.value = true
 }
 
 function onDriverChange() {
-  // Re-apply Baidu defaults whenever the driver switches (or is first picked).
+  // Re-apply driver defaults whenever the driver switches (or is first picked).
   form.value.client_id = DEFAULT_CLIENT_ID
   form.value.client_secret = DEFAULT_CLIENT_SECRET
+  form.value.root_path = '/'
+  form.value.cookie = ''
+  form.value.root_id = '0'
 }
 
 async function openAuthorize() {
@@ -170,6 +176,21 @@ async function openAuthorize() {
   }
 }
 
+function buildAddition(): Record<string, unknown> {
+  if (form.value.driver === 'quark') {
+    return {
+      cookie: form.value.cookie.trim(),
+      root_id: form.value.root_id.trim() || '0',
+    }
+  }
+  return {
+    refresh_token: form.value.refresh_token.trim(),
+    root_path: form.value.root_path.trim() || '/',
+    client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
+    client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
+  }
+}
+
 async function save() {
   if (!form.value.mount_path.trim()) {
     message.warning('请填写挂载路径')
@@ -179,14 +200,13 @@ async function save() {
     message.warning('请填写 refresh_token（可点击「获取」打开授权页面）')
     return
   }
+  if (form.value.driver === 'quark' && !form.value.cookie.trim()) {
+    message.warning('请填写夸克网页版 Cookie（登录 pan.quark.cn 后从浏览器复制）')
+    return
+  }
   saving.value = true
   try {
-    const addition: BaiduAddition = {
-      refresh_token: form.value.refresh_token.trim(),
-      root_path: form.value.root_path.trim() || '/',
-      client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
-      client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
-    }
+    const addition = buildAddition()
     if (editingId.value === null) {
       await invoke('cloud_storage_add', {
         mountPath: form.value.mount_path.trim(),
@@ -294,7 +314,7 @@ onMounted(async () => {
             <tr v-for="s in storages" :key="s.id">
               <td class="storage-mount">{{ s.mount_path }}</td>
               <td class="storage-col-driver storage-muted">
-                {{ s.driver === 'baidu_netdisk' ? '百度网盘' : s.driver }}
+                {{ s.driver === 'baidu_netdisk' ? '百度网盘' : s.driver === 'quark' ? '夸克网盘' : s.driver }}
               </td>
               <td>
                 <span class="storage-status" :class="{ 'storage-status--err': s.status !== '正常' }">{{
@@ -379,6 +399,24 @@ onMounted(async () => {
           </NSpace>
           <NFormItem label="root_path（挂载根目录）">
             <NInput v-model:value="form.root_path" placeholder="/" />
+          </NFormItem>
+        </template>
+
+        <template v-else-if="isQuark">
+          <NFormItem label="Cookie">
+            <NInput
+              v-model:value="form.cookie"
+              type="textarea"
+              :autosize="{ minRows: 4, maxRows: 8 }"
+              placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
+            />
+          </NFormItem>
+          <p class="storage-quark-tip">
+            获取方式：浏览器登录 <code>pan.quark.cn</code> → 按 F12 打开开发者工具 → Application → Cookies →
+            全选复制（形如 <code>xxx=yyy; zzz=aaa</code>）。Cookie 失效后需重新复制更新。
+          </p>
+          <NFormItem label="root_id（挂载根目录 fid）">
+            <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
           </NFormItem>
         </template>
 
@@ -474,6 +512,18 @@ onMounted(async () => {
 }
 .storage-token-get {
   flex: none;
+}
+.storage-quark-tip {
+  margin: -4px 0 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--m3-on-surface-variant);
+}
+.storage-quark-tip code {
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-size: 11px;
 }
 .storage-flex-item {
   flex: 1;

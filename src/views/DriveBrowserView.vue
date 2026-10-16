@@ -47,7 +47,10 @@ const message = useMessage()
 const storages = ref<CloudStorage[]>([])
 const activeStorage = ref<CloudStorage | null>(null)
 const rootPath = ref('/')
-const crumbSegs = ref<string[]>([])
+/** Browse stack: one entry per folder opened below the storage root.
+ *  `key` is what the driver expects (Baidu: absolute path; Quark: fid). */
+const browseStack = ref<{ name: string; key: string }[]>([])
+const crumbSegs = computed(() => browseStack.value.map((x) => x.name))
 const files = ref<DriveFile[]>([])
 const loading = ref(false)
 const loadError = ref('')
@@ -61,6 +64,11 @@ const currentPath = computed(() => {
   if (isRoot.value) return '/'
   if (crumbSegs.value.length === 0) return rootPath.value
   return (rootPath.value === '/' ? '' : rootPath.value) + '/' + crumbSegs.value.join('/')
+})
+/** The browse key of the folder currently shown (root or last stack entry). */
+const currentKey = computed(() => {
+  if (browseStack.value.length === 0) return rootPath.value
+  return browseStack.value[browseStack.value.length - 1].key
 })
 const selectedFiles = computed(() => files.value.filter((f) => selected.value.has(f.fs_id)))
 /** Only enabled storages are browsable, so disabled ones are hidden here.
@@ -159,15 +167,15 @@ async function loadStorages() {
 function enterStorage(s: CloudStorage) {
   if (s.disabled) return
   activeStorage.value = s
-  let root = '/'
+  let root = s.driver === 'quark' ? '0' : '/'
   try {
-    const addition = JSON.parse(s.addition) as { root_path?: string }
-    root = addition.root_path?.trim() || '/'
+    const addition = JSON.parse(s.addition) as { root_path?: string; root_id?: string }
+    root = s.driver === 'quark' ? addition.root_id?.trim() || '0' : addition.root_path?.trim() || '/'
   } catch {
-    root = '/'
+    // keep driver default above
   }
   rootPath.value = root
-  crumbSegs.value = []
+  browseStack.value = []
   void loadDir(root)
 }
 
@@ -183,9 +191,6 @@ async function loadDir(fullPath: string) {
     })
     files.value = list
     selected.value = new Set()
-    const rel =
-      fullPath === '/' ? '' : fullPath.replace(rootPath.value === '/' ? '/' : rootPath.value, '').replace(/^\/+/, '')
-    crumbSegs.value = rel ? rel.split('/').filter(Boolean) : []
   } catch (err) {
     loadError.value = errMsg(err)
     files.value = []
@@ -198,7 +203,7 @@ async function loadDir(fullPath: string) {
 function goHome() {
   if (isRoot.value) return
   activeStorage.value = null
-  crumbSegs.value = []
+  browseStack.value = []
   files.value = []
   selected.value = new Set()
   void loadStorages()
@@ -206,20 +211,26 @@ function goHome() {
 
 function goToStorageRoot() {
   if (!activeStorage.value) return
+  browseStack.value = []
   void loadDir(rootPath.value)
 }
 
 function goToCrumb(i: number) {
-  // i = -1 -> storage root; 0.. -> segment
-  const target =
-    i < 0
-      ? rootPath.value
-      : (rootPath.value === '/' ? '' : rootPath.value) + '/' + crumbSegs.value.slice(0, i + 1).join('/')
-  void loadDir(target)
+  // i = -1 -> storage root; 0.. -> that stack entry
+  if (i < 0) {
+    browseStack.value = []
+    void loadDir(rootPath.value)
+    return
+  }
+  browseStack.value = browseStack.value.slice(0, i + 1)
+  void loadDir(browseStack.value[i].key)
 }
 
 function enterDir(f: DriveFile) {
-  if (f.isdir) void loadDir(f.path)
+  if (f.isdir) {
+    browseStack.value.push({ name: f.name, key: f.path })
+    void loadDir(f.path)
+  }
 }
 
 function toggle(f: DriveFile) {
@@ -231,7 +242,7 @@ function toggle(f: DriveFile) {
 
 async function refresh() {
   if (isRoot.value) await loadStorages()
-  else await loadDir(currentPath.value)
+  else await loadDir(currentKey.value)
 }
 
 async function submitDownload(list: DriveFile[], successMsg: (n: number) => string) {
