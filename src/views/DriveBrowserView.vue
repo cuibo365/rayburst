@@ -11,7 +11,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { NButton, NCheckbox, NEmpty, NIcon, NSpin, useMessage } from 'naive-ui'
 import {
   ChevronForwardOutline,
-  CloudOutline,
   DocumentOutline,
   DownloadOutline,
   FolderOpenOutline,
@@ -64,6 +63,9 @@ const currentPath = computed(() => {
   return (rootPath.value === '/' ? '' : rootPath.value) + '/' + crumbSegs.value.join('/')
 })
 const selectedFiles = computed(() => files.value.filter((f) => selected.value.has(f.fs_id)))
+/** Only enabled storages are browsable, so disabled ones are hidden here.
+ *  (The storage manager page still lists them so they can be re-enabled.) */
+const visibleStorages = computed(() => storages.value.filter((s) => !s.disabled))
 
 // --- formatting ---
 function fmtSize(n: number): string {
@@ -337,8 +339,8 @@ onMounted(async () => {
     <div class="drive-list">
       <NSpin :show="loading">
         <NEmpty
-          v-if="!loading && isRoot && storages.length === 0"
-          description="暂无存储，请到「存储」页添加"
+          v-if="!loading && isRoot && visibleStorages.length === 0"
+          description="暂无可用存储，请到「存储」页添加或启用"
           class="drive-empty"
         />
         <NEmpty v-else-if="!loading && loadError" :description="loadError" class="drive-empty" />
@@ -356,10 +358,9 @@ onMounted(async () => {
           </thead>
           <tbody v-if="isRoot">
             <tr
-              v-for="s in storages"
+              v-for="s in visibleStorages"
               :key="s.id"
               class="drive-row"
-              :class="{ 'drive-row--disabled': s.disabled, 'drive-row--sel': false }"
               tabindex="0"
               :aria-label="s.mount_path"
               @click="enterStorage(s)"
@@ -367,13 +368,11 @@ onMounted(async () => {
             >
               <td class="drive-col-check"></td>
               <td>
-                <span class="drive-name" :class="{ 'drive-name--dir': !s.disabled }">
+                <span class="drive-name drive-name--dir">
                   <NIcon :size="17" aria-hidden="true" class="drive-name-icon">
-                    <FolderOpenOutline v-if="!s.disabled" />
-                    <CloudOutline v-else />
+                    <FolderOpenOutline />
                   </NIcon>
                   <span class="drive-name-text">{{ s.mount_path }}</span>
-                  <span v-if="s.disabled" class="drive-name-badge">已禁用</span>
                 </span>
               </td>
               <td class="drive-col-size drive-muted">—</td>
@@ -517,13 +516,6 @@ onMounted(async () => {
   outline: 2px solid var(--m3-primary);
   outline-offset: -2px;
 }
-.drive-row--disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-.drive-row--disabled:hover td {
-  background: transparent !important;
-}
 .drive-row--sel {
   background: rgba(59, 130, 246, 0.08);
 }
@@ -571,15 +563,6 @@ onMounted(async () => {
 }
 .drive-name--dir .drive-name-icon {
   color: #f0a020;
-}
-.drive-name-badge {
-  margin-left: 8px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  color: var(--m3-on-surface-variant);
-  background: rgba(128, 128, 128, 0.18);
-  flex: none;
 }
 .drive-muted {
   color: var(--m3-on-surface-variant);
