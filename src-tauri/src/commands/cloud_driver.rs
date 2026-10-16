@@ -112,8 +112,12 @@ impl CloudDriver {
         match self {
             CloudDriver::Baidu(d) => {
                 match &result {
-                    Ok(_) => d.set_status(db, "正常").await,
-                    Err(e) => d.set_status(db, &format!("错误: {e}")).await,
+                    Ok(_) => {
+                        d.set_status(db, "正常").await;
+                    }
+                    Err(e) => {
+                        d.set_status(db, &format!("错误: {e}")).await;
+                    }
                 }
             }
         }
@@ -169,9 +173,9 @@ impl BaiduDriver {
             .post(OAUTH_TOKEN_URL)
             .form(&[
                 ("grant_type", "refresh_token"),
-                ("refresh_token", self.addition.refresh_token.clone()),
-                ("client_id", self.addition.client_id.clone()),
-                ("client_secret", self.addition.client_secret.clone()),
+                ("refresh_token", self.addition.refresh_token.as_str()),
+                ("client_id", self.addition.client_id.as_str()),
+                ("client_secret", self.addition.client_secret.as_str()),
             ])
             .send()
             .await
