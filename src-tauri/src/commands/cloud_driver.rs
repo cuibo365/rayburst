@@ -159,15 +159,17 @@ impl CloudDriver {
             }
             CloudDriver::Quark(d) => d.list(db, path).await,
         };
+        let status = match &result {
+            Ok(_) => "正常".to_string(),
+            Err(e) => format!("错误: {e}"),
+        };
         match self {
-            CloudDriver::Baidu(d) => match &result {
-                Ok(_) => d.set_status(db, "正常").await,
-                Err(e) => d.set_status(db, &format!("错误: {e}")).await,
-            },
-            CloudDriver::Quark(d) => match &result {
-                Ok(_) => d.set_status(db, "正常").await,
-                Err(e) => d.set_status(db, &format!("错误: {e}")).await,
-            },
+            CloudDriver::Baidu(d) => {
+                d.set_status(db, &status).await;
+            }
+            CloudDriver::Quark(d) => {
+                d.set_status(db, &status).await;
+            }
         }
         result
     }
@@ -744,6 +746,8 @@ pub async fn cloud_drive_storage_download(
     files: Vec<CloudDriveFile>,
     current_dir: Option<String>,
 ) -> Result<CloudDriveResult, AppError> {
+    // Kept for API compatibility; download dirs come from each file's rel_path.
+    let _ = &current_dir;
     if files.is_empty() {
         return Err(AppError::CloudDrive("没有选择文件".into()));
     }

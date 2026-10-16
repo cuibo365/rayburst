@@ -76,7 +76,7 @@ pub(crate) fn sanitize_dir_path(raw: &str) -> String {
 
     let keep_drive = (s.len() >= 2 && s.as_bytes()[1] == b':' && s.as_bytes()[0].is_ascii_alphabetic())
         .then(|| s[..2].to_string());
-    let body = if let Some(drive) = &keep_drive {
+    let body = if keep_drive.is_some() {
         &s[2..]
     } else {
         s.as_str()
