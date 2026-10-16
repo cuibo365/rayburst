@@ -565,19 +565,43 @@ impl QuarkDriver {
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
+                let mut skipped = 0usize;
                 for item in &list {
-                    let Some(fid_str) = item["fid"].as_str() else { continue };
-                    let Ok(fs_id) = fid_str.parse::<u64>() else { continue };
+                    // Quark returns `fid` as a JSON string in some API versions
+                    // and as a plain number in others; accept both.
+                    let fid_str = item["fid"]
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| item["fid"].as_u64().map(|n| n.to_string()))
+                        .or_else(|| item["fid"].as_i64().map(|n| n.to_string()));
+                    let Some(fid_str) = fid_str else {
+                        skipped += 1;
+                        continue;
+                    };
+                    let Ok(fs_id) = fid_str.parse::<u64>() else {
+                        skipped += 1;
+                        continue;
+                    };
+                    let is_file = item["file"]
+                        .as_bool()
+                        .unwrap_or_else(|| item["file"].as_u64().map(|v| v != 0).unwrap_or(false));
                     out.push(crate::commands::CloudDriveFile {
                         fs_id,
                         name: html_unescape(item["file_name"].as_str().unwrap_or("")),
                         size: item["size"].as_u64().unwrap_or(0),
-                        path: fid_str.to_string(),
-                        isdir: !item["file"].as_bool().unwrap_or(false),
+                        path: fid_str.clone(),
+                        isdir: !is_file,
                         mtime: (item["updated_at"].as_i64().unwrap_or(0).max(0) / 1000) as u64,
                         category: item["category"].as_u64().unwrap_or(0) as u32,
                         rel_path: String::new(),
                     });
+                }
+                if out.is_empty() && skipped > 0 {
+                    log::warn!(
+                        "quark: skipped {skipped}/{} items for fid {fid}; sample={}",
+                        list.len(),
+                        serde_json::to_string(&list[0]).unwrap_or_default()
+                    );
                 }
                 let total = json["metadata"]["_total"].as_u64().unwrap_or(0);
                 if total > 0 {
