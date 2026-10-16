@@ -79,6 +79,7 @@ async function ensureDbReady(): Promise<boolean> {
 const DRIVERS = [
   { label: '百度网盘', value: 'baidu_netdisk' },
   { label: '夸克网盘', value: 'quark' },
+  { label: '夸克分享', value: 'quark_share' },
 ] as const
 
 const message = useMessage()
@@ -98,6 +99,7 @@ const form = ref<{
   root_path: string
   cookie: string
   root_id: string
+  share_url: string
   remark: string
 }>({
   mount_path: '',
@@ -108,12 +110,14 @@ const form = ref<{
   root_path: '/',
   cookie: '',
   root_id: '0',
+  share_url: '',
   remark: '',
 })
 
 const dialogTitle = computed(() => (editingId.value === null ? '添加存储' : '编辑存储'))
 const isBaidu = computed(() => form.value.driver === 'baidu_netdisk')
 const isQuark = computed(() => form.value.driver === 'quark')
+const isQuarkShare = computed(() => form.value.driver === 'quark_share')
 
 function resetForm() {
   editingId.value = null
@@ -126,6 +130,7 @@ function resetForm() {
     root_path: '/',
     cookie: '',
     root_id: '0',
+    share_url: '',
     remark: '',
   }
 }
@@ -152,6 +157,7 @@ function openEdit(s: CloudStorage) {
     root_path: (addition.root_path as string) ?? '/',
     cookie: (addition.cookie as string) ?? '',
     root_id: (addition.root_id as string) ?? '0',
+    share_url: (addition.share_url as string) ?? '',
     remark: s.remark,
   }
   showDialog.value = true
@@ -164,6 +170,7 @@ function onDriverChange() {
   form.value.root_path = '/'
   form.value.cookie = ''
   form.value.root_id = '0'
+  form.value.share_url = ''
 }
 
 async function openAuthorize() {
@@ -181,6 +188,12 @@ function buildAddition(): Record<string, unknown> {
     return {
       cookie: form.value.cookie.trim(),
       root_id: form.value.root_id.trim() || '0',
+    }
+  }
+  if (form.value.driver === 'quark_share') {
+    return {
+      share_url: form.value.share_url.trim(),
+      cookie: form.value.cookie.trim(),
     }
   }
   return {
@@ -203,6 +216,16 @@ async function save() {
   if (form.value.driver === 'quark' && !form.value.cookie.trim()) {
     message.warning('请填写夸克网页版 Cookie（登录 pan.quark.cn 后从浏览器复制）')
     return
+  }
+  if (form.value.driver === 'quark_share') {
+    if (!form.value.share_url.trim()) {
+      message.warning('请填写夸克分享地址（https://pan.quark.cn/s/...）')
+      return
+    }
+    if (!form.value.cookie.trim()) {
+      message.warning('请填写夸克网页版 Cookie（下载分享文件需要登录态）')
+      return
+    }
   }
   saving.value = true
   try {
@@ -314,7 +337,15 @@ onMounted(async () => {
             <tr v-for="s in storages" :key="s.id">
               <td class="storage-mount">{{ s.mount_path }}</td>
               <td class="storage-col-driver storage-muted">
-                {{ s.driver === 'baidu_netdisk' ? '百度网盘' : s.driver === 'quark' ? '夸克网盘' : s.driver }}
+                {{
+                  s.driver === 'baidu_netdisk'
+                    ? '百度网盘'
+                    : s.driver === 'quark'
+                      ? '夸克网盘'
+                      : s.driver === 'quark_share'
+                        ? '夸克分享'
+                        : s.driver
+                }}
               </td>
               <td>
                 <span class="storage-status" :class="{ 'storage-status--err': s.status !== '正常' }">{{
@@ -418,6 +449,25 @@ onMounted(async () => {
           <NFormItem label="root_id（挂载根目录 fid）">
             <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
           </NFormItem>
+        </template>
+
+        <template v-else-if="isQuarkShare">
+          <NFormItem label="分享地址">
+            <NInput v-model:value="form.share_url" placeholder="https://pan.quark.cn/s/xxxx（可带 ?pwd= 提取码）" />
+          </NFormItem>
+          <NFormItem label="Cookie">
+            <NInput
+              v-model:value="form.cookie"
+              type="textarea"
+              :autosize="{ minRows: 4, maxRows: 8 }"
+              placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
+            />
+          </NFormItem>
+          <p class="storage-quark-tip">
+            分享浏览不需要登录，但<strong>下载需要 Cookie</strong>（夸克分享文件需登录态才能拿下载地址）。
+            获取方式：浏览器登录 <code>pan.quark.cn</code> → F12 → Application → Cookies → 全选复制。
+            分享链接若带提取码（<code>?pwd=xxxx</code>）请一并粘贴。
+          </p>
         </template>
 
         <NFormItem label="备注">

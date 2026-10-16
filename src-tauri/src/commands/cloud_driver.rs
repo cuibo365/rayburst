@@ -119,6 +119,7 @@ fn html_unescape(s: &str) -> String {
 pub enum CloudDriver {
     Baidu(BaiduDriver),
     Quark(QuarkDriver),
+    QuarkShare(QuarkShareDriver),
 }
 
 impl CloudDriver {
@@ -132,6 +133,10 @@ impl CloudDriver {
                 id: storage.id,
                 addition: QuarkAddition::parse(&storage.addition)?,
             })),
+            "quark_share" => Ok(CloudDriver::QuarkShare(QuarkShareDriver {
+                id: storage.id,
+                addition: QuarkShareAddition::parse(&storage.addition)?,
+            })),
             other => Err(AppError::CloudDrive(format!(
                 "不支持的驱动类型：{other}"
             ))),
@@ -142,11 +147,13 @@ impl CloudDriver {
         match self {
             CloudDriver::Baidu(_) => "baidu_netdisk",
             CloudDriver::Quark(_) => "quark",
+            CloudDriver::QuarkShare(_) => "quark_share",
         }
     }
 
     /// List the children of `path`. For Baidu this is an absolute drive path
-    /// (including the mount root); for Quark it is a directory fid (`0` = root).
+    /// (including the mount root); for Quark/QuarkShare it is a directory fid
+    /// (`0` = root).
     pub async fn list(
         &mut self,
         db: &Database,
@@ -158,6 +165,7 @@ impl CloudDriver {
                 d.list(path, &token).await
             }
             CloudDriver::Quark(d) => d.list(db, path).await,
+            CloudDriver::QuarkShare(d) => d.list(db, path).await,
         };
         let status = match &result {
             Ok(_) => "正常".to_string(),
@@ -168,6 +176,9 @@ impl CloudDriver {
                 d.set_status(db, &status).await;
             }
             CloudDriver::Quark(d) => {
+                d.set_status(db, &status).await;
+            }
+            CloudDriver::QuarkShare(d) => {
                 d.set_status(db, &status).await;
             }
         }
@@ -333,6 +344,8 @@ impl BaiduDriver {
                     category: f.category,
                     id: f.fs_id.to_string(),
                     rel_path: String::new(),
+                    pdir_fid: String::new(),
+                    share_fid_token: String::new(),
                 });
             }
             if out.len() < (page + 1) * LIMIT {
@@ -594,6 +607,8 @@ impl QuarkDriver {
                         category: item["category"].as_u64().unwrap_or(0) as u32,
                         id: fid_str.clone(),
                         rel_path: String::new(),
+                        pdir_fid: String::new(),
+                        share_fid_token: String::new(),
                     });
                 }
                 if out.is_empty() && skipped > 0 {
@@ -683,6 +698,319 @@ impl QuarkDriver {
         }
         if result.is_empty() {
             return Err(AppError::CloudDrive("未能获取任何夸克文件的下载地址".into()));
+        }
+        Ok(result)
+    }
+}
+
+// ============================== Quark share driver ==============================
+
+/// Quark share driver addition: a shared-folder URL plus the web-session
+/// cookie (listing a share needs no login, downloading does). `stoken` is the
+/// share access token from `share/sharepage/token`; it is cached and persisted
+/// here and refreshed on demand when a call fails.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuarkShareAddition {
+    /// Full share URL, e.g. `https://pan.quark.cn/s/<code>` (may carry `?pwd=`).
+    pub share_url: String,
+    /// pan.quark.cn web-session cookie (download requires login state).
+    pub cookie: String,
+    /// Share access token (`stoken`), refreshed on demand and persisted back.
+    #[serde(default)]
+    pub stoken: String,
+}
+
+impl QuarkShareAddition {
+    pub fn parse(json: &str) -> Result<Self, AppError> {
+        serde_json::from_str(json)
+            .map_err(|e| AppError::CloudDrive(format!("解析驱动配置失败: {e}")))
+    }
+    fn to_json(&self) -> Result<String, AppError> {
+        serde_json::to_string(self)
+            .map_err(|e| AppError::CloudDrive(format!("序列化驱动配置失败: {e}")))
+    }
+    /// Extract `pwd_id` (from `/s/<code>`) and `passcode` (from `?pwd=xxx`).
+    fn credentials(&self) -> Result<(String, String), AppError> {
+        let base = self.share_url.split('?').next().unwrap_or("").trim_end_matches('/');
+        let pwd_id = base.rsplit('/').next().unwrap_or("").trim().to_string();
+        if pwd_id.is_empty() {
+            return Err(AppError::CloudDrive(
+                "分享地址格式不正确，应为 https://pan.quark.cn/s/<code>".into(),
+            ));
+        }
+        let passcode = self
+            .share_url
+            .split('?')
+            .nth(1)
+            .unwrap_or("")
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("pwd="))
+            .unwrap_or("")
+            .to_string();
+        Ok((pwd_id, passcode))
+    }
+}
+
+/// Quark share driver: browse and download from a public share link
+/// (`share/sharepage/token` -> `share/sharepage/detail` -> `file/download`).
+/// Listing works without a cookie; the download request and the download URL
+/// carry the same cookie + share context (stoken/pwd_id/pdir_fid/share token).
+pub struct QuarkShareDriver {
+    id: i64,
+    addition: QuarkShareAddition,
+}
+
+impl QuarkShareDriver {
+    fn http_client() -> Result<reqwest::Client, AppError> {
+        reqwest::Client::builder()
+            .user_agent(QUARK_UA)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
+    }
+
+    async fn persist(&self, db: &Database) -> Result<(), AppError> {
+        db.update_storage_addition(self.id, &self.addition.to_json()?)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_status(&self, db: &Database, status: &str) -> Result<(), AppError> {
+        db.set_storage_status(self.id, status).await
+    }
+
+    /// Re-fetch the share access token from `share/sharepage/token`.
+    async fn refresh_stoken(&mut self, db: &Database) -> Result<String, AppError> {
+        let (pwd_id, passcode) = self.addition.credentials()?;
+        let client = Self::http_client()?;
+        let body = serde_json::json!({ "pwd_id": pwd_id, "passcode": passcode });
+        let url = format!("{QUARK_API}/share/sharepage/token?pr=ucpro&fr=pc");
+        let resp = client
+            .post(&url)
+            .header("Cookie", &self.addition.cookie)
+            .header("Referer", QUARK_REFERER)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("获取分享 token 失败: {e}")))?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("解析分享 token 响应失败: {e}")))?;
+        let code = json["code"].as_i64().unwrap_or(-1);
+        let message = json["message"].as_str().unwrap_or("");
+        if code != 0 {
+            return Err(AppError::CloudDrive(format!(
+                "获取分享 token 失败（code={code}）：{}",
+                if message.is_empty() { "未知错误" } else { message }
+            )));
+        }
+        let stoken = json["data"]["stoken"]
+            .as_str()
+            .ok_or_else(|| AppError::CloudDrive("分享 token 响应缺少 stoken".into()))?
+            .to_string();
+        self.addition.stoken = stoken.clone();
+        self.persist(db).await?;
+        Ok(stoken)
+    }
+
+    async fn ensure_stoken(&mut self, db: &Database) -> Result<String, AppError> {
+        if !self.addition.stoken.is_empty() {
+            return Ok(self.addition.stoken.clone());
+        }
+        self.refresh_stoken(db).await
+    }
+
+    async fn list(
+        &mut self,
+        db: &Database,
+        fid: &str,
+    ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
+        const SIZE: usize = 50;
+        const MAX_PAGES: usize = 100; // 安全上限：最多 5 万文件
+        let (pwd_id, _passcode) = self.addition.credentials()?;
+        let mut out = Vec::new();
+        let mut page = 1usize;
+        let mut total_hint: u64 = 0;
+        loop {
+            let mut page_ok = false;
+            for attempt in 0..QUARK_MAX_ATTEMPTS {
+                let stoken = if attempt == 0 {
+                    self.ensure_stoken(db).await?
+                } else {
+                    self.refresh_stoken(db).await?
+                };
+                let client = Self::http_client()?;
+                let url = format!(
+                    "{QUARK_API}/share/sharepage/detail?pr=ucpro&fr=pc&pwd_id={}&stoken={}&pdir_fid={}&force=0&_page={}&_size={SIZE}&_fetch_banner=1&_fetch_share=1&_fetch_total=1&_sort=file_type:asc,updated_at:desc",
+                    urlencoding::encode(&pwd_id),
+                    urlencoding::encode(&stoken),
+                    urlencoding::encode(fid),
+                    page
+                );
+                let resp = client
+                    .get(&url)
+                    .header("Cookie", &self.addition.cookie)
+                    .header("Referer", QUARK_REFERER)
+                    .send()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("请求夸克分享列表失败: {e}")))?;
+                let status = resp.status();
+                let text = resp
+                    .text()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("读取夸克分享列表响应失败: {e}")))?;
+                let json: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|e| AppError::CloudDrive(format!("解析夸克分享列表失败: {e}")))?;
+                let code = json["code"].as_i64().unwrap_or(-1);
+                let message = json["message"].as_str().unwrap_or("");
+                if !status.is_success() || code != 0 {
+                    if attempt + 1 < QUARK_MAX_ATTEMPTS {
+                        continue; // stale stoken or share error → refresh once
+                    }
+                    return Err(AppError::CloudDrive(format!(
+                        "夸克分享返回错误 code={code}: {}",
+                        if message.is_empty() { "未知错误" } else { message }
+                    )));
+                }
+                let list = json["data"]["list"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                for item in &list {
+                    let fid_str = item["fid"]
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| item["fid"].as_u64().map(|n| n.to_string()))
+                        .or_else(|| item["fid"].as_i64().map(|n| n.to_string()));
+                    let Some(fid_str) = fid_str else { continue };
+                    let is_file = item["file"]
+                        .as_bool()
+                        .or_else(|| item["file"].as_u64().map(|v| v != 0))
+                        .or_else(|| item["dir"].as_bool().map(|d| !d))
+                        .unwrap_or(false);
+                    out.push(crate::commands::CloudDriveFile {
+                        fs_id: 0,
+                        name: html_unescape(item["file_name"].as_str().unwrap_or("")),
+                        size: item["size"].as_u64().unwrap_or(0),
+                        path: fid_str.clone(),
+                        isdir: !is_file,
+                        mtime: (item["updated_at"].as_i64().unwrap_or(0).max(0) / 1000) as u64,
+                        category: item["category"].as_u64().unwrap_or(0) as u32,
+                        id: fid_str.clone(),
+                        rel_path: String::new(),
+                        pdir_fid: fid.to_string(),
+                        share_fid_token: item["share_fid_token"].as_str().unwrap_or("").to_string(),
+                    });
+                }
+                let total = json["metadata"]["_total"].as_u64().unwrap_or(0);
+                if total > 0 {
+                    total_hint = total;
+                }
+                page_ok = true;
+                break;
+            }
+            if !page_ok {
+                break;
+            }
+            if page as u64 * SIZE as u64 >= total_hint || page >= MAX_PAGES {
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
+    }
+
+    /// Fetch download URLs from a share. Files are grouped by their parent
+    /// fid so each `file/download` request carries one share context
+    /// (stoken/pwd_id/pdir_fid/share_fid_token). The signed URL is tied to
+    /// the cookie used for the request, so that cookie rides along in aria2.
+    pub async fn get_dlinks(
+        &mut self,
+        db: &Database,
+        files: &[crate::commands::CloudDriveFile],
+    ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
+        let (pwd_id, _passcode) = self.addition.credentials()?;
+        let mut result = Vec::new();
+        let mut by_parent: std::collections::HashMap<String, Vec<crate::commands::CloudDriveFile>> =
+            std::collections::HashMap::new();
+        for f in files {
+            let key = if f.pdir_fid.is_empty() {
+                "0".to_string()
+            } else {
+                f.pdir_fid.clone()
+            };
+            by_parent.entry(key).or_default().push(f.clone());
+        }
+        for (pdir_fid, group) in by_parent {
+            for chunk in group.chunks(100) {
+                let mut chunk_ok = false;
+                for attempt in 0..QUARK_MAX_ATTEMPTS {
+                    let stoken = if attempt == 0 {
+                        self.ensure_stoken(db).await?
+                    } else {
+                        self.refresh_stoken(db).await?
+                    };
+                    let client = Self::http_client()?;
+                    let fids: Vec<String> = chunk.iter().map(|f| f.id.clone()).collect();
+                    let tokens: Vec<String> =
+                        chunk.iter().map(|f| f.share_fid_token.clone()).collect();
+                    let body = serde_json::json!({
+                        "fids": fids,
+                        "stoken": stoken,
+                        "pwd_id": pwd_id,
+                        "pdir_fid": pdir_fid,
+                        "share_fid_token": tokens,
+                    });
+                    let url = format!("{QUARK_API}/file/download?pr=ucpro&fr=pc");
+                    let req_cookie = self.addition.cookie.clone();
+                    let resp = client
+                        .post(&url)
+                        .header("Cookie", &req_cookie)
+                        .header("Referer", QUARK_REFERER)
+                        .json(&body)
+                        .send()
+                        .await
+                        .map_err(|e| AppError::CloudDrive(format!("请求夸克分享下载地址失败: {e}")))?;
+                    let status = resp.status();
+                    let json: serde_json::Value = resp
+                        .json()
+                        .await
+                        .map_err(|e| AppError::CloudDrive(format!("解析夸克分享下载地址失败: {e}")))?;
+                    let code = json["code"].as_i64().unwrap_or(-1);
+                    let message = json["message"].as_str().unwrap_or("");
+                    if !status.is_success() || code != 0 {
+                        if attempt + 1 < QUARK_MAX_ATTEMPTS {
+                            continue; // refresh stoken and retry once
+                        }
+                        return Err(AppError::CloudDrive(format!(
+                            "获取夸克分享下载地址失败（code={code}）：{}",
+                            if message.is_empty() { "未知错误" } else { message }
+                        )));
+                    }
+                    let data = json["data"].as_array().cloned().unwrap_or_default();
+                    let headers = vec![
+                        format!("User-Agent: {QUARK_UA}"),
+                        format!("Referer: {QUARK_REFERER}"),
+                        format!("Cookie: {req_cookie}"),
+                    ];
+                    for (i, item) in data.iter().enumerate() {
+                        let Some(url) = item["download_url"].as_str() else { continue };
+                        let Some(file) = chunk.get(i) else { continue };
+                        result.push((file.clone(), url.to_string(), headers.clone()));
+                    }
+                    chunk_ok = true;
+                    break;
+                }
+                if !chunk_ok {
+                    break;
+                }
+            }
+        }
+        if result.is_empty() {
+            return Err(AppError::CloudDrive(
+                "未能获取任何夸克分享文件的下载地址".into(),
+            ));
         }
         Ok(result)
     }
@@ -783,6 +1111,7 @@ pub async fn cloud_drive_storage_download(
     let links = match &mut driver {
         CloudDriver::Baidu(d) => d.get_dlinks(&db.0, &files).await?,
         CloudDriver::Quark(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::QuarkShare(d) => d.get_dlinks(&db.0, &files).await?,
     };
 
     let default_dir: Option<String> = app

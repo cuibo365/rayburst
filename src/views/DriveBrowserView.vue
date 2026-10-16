@@ -169,7 +169,10 @@ async function loadStorages() {
 function enterStorage(s: CloudStorage) {
   if (s.disabled) return
   activeStorage.value = s
-  let root = s.driver === 'quark' ? '0' : '/'
+  // Fid-based drivers (Quark drive / Quark share) start at the fid root `0`;
+  // Baidu starts at the mount root path.
+  const fidBased = s.driver === 'quark' || s.driver === 'quark_share'
+  let root = fidBased ? '0' : '/'
   try {
     const addition = JSON.parse(s.addition) as { root_path?: string; root_id?: string }
     root = s.driver === 'quark' ? addition.root_id?.trim() || '0' : addition.root_path?.trim() || '/'

@@ -32,6 +32,14 @@ pub struct CloudDriveFile {
     /// download into the default dir). Populated by `expand_folders`.
     #[serde(default)]
     pub rel_path: String,
+    /// Parent directory id. Quark share: the containing share folder fid
+    /// (`0` = share root), carried back in the share download request.
+    #[serde(default)]
+    pub pdir_fid: String,
+    /// Share-scoped file token returned by the share detail API; echoed back
+    /// in the share download request. Empty for non-share drivers.
+    #[serde(default)]
+    pub share_fid_token: String,
 }
 
 #[derive(Debug, Serialize)]
