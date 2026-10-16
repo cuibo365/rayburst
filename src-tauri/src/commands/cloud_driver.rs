@@ -715,6 +715,9 @@ pub struct QuarkShareAddition {
     pub share_url: String,
     /// pan.quark.cn web-session cookie (download requires login state).
     pub cookie: String,
+    /// Optional share passcode. Used only when the URL itself has no `pwd=`.
+    #[serde(default)]
+    pub passcode: String,
     /// Share access token (`stoken`), refreshed on demand and persisted back.
     #[serde(default)]
     pub stoken: String,
@@ -729,7 +732,8 @@ impl QuarkShareAddition {
         serde_json::to_string(self)
             .map_err(|e| AppError::CloudDrive(format!("序列化驱动配置失败: {e}")))
     }
-    /// Extract `pwd_id` (from `/s/<code>`) and `passcode` (from `?pwd=xxx`).
+    /// Extract `pwd_id` (from `/s/<code>`) and `passcode`. The URL's `?pwd=`
+    /// wins when present; otherwise the standalone `passcode` field is used.
     fn credentials(&self) -> Result<(String, String), AppError> {
         let base = self.share_url.split('?').next().unwrap_or("").trim_end_matches('/');
         let pwd_id = base.rsplit('/').next().unwrap_or("").trim().to_string();
@@ -738,7 +742,7 @@ impl QuarkShareAddition {
                 "分享地址格式不正确，应为 https://pan.quark.cn/s/<code>".into(),
             ));
         }
-        let passcode = self
+        let url_passcode = self
             .share_url
             .split('?')
             .nth(1)
@@ -747,6 +751,11 @@ impl QuarkShareAddition {
             .find_map(|kv| kv.strip_prefix("pwd="))
             .unwrap_or("")
             .to_string();
+        let passcode = if url_passcode.is_empty() {
+            self.passcode.trim().to_string()
+        } else {
+            url_passcode
+        };
         Ok((pwd_id, passcode))
     }
 }

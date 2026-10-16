@@ -100,6 +100,7 @@ const form = ref<{
   cookie: string
   root_id: string
   share_url: string
+  passcode: string
   remark: string
 }>({
   mount_path: '',
@@ -111,6 +112,7 @@ const form = ref<{
   cookie: '',
   root_id: '0',
   share_url: '',
+  passcode: '',
   remark: '',
 })
 
@@ -131,6 +133,7 @@ function resetForm() {
     cookie: '',
     root_id: '0',
     share_url: '',
+    passcode: '',
     remark: '',
   }
 }
@@ -158,6 +161,7 @@ function openEdit(s: CloudStorage) {
     cookie: (addition.cookie as string) ?? '',
     root_id: (addition.root_id as string) ?? '0',
     share_url: (addition.share_url as string) ?? '',
+    passcode: (addition.passcode as string) ?? '',
     remark: s.remark,
   }
   showDialog.value = true
@@ -171,6 +175,7 @@ function onDriverChange() {
   form.value.cookie = ''
   form.value.root_id = '0'
   form.value.share_url = ''
+  form.value.passcode = ''
 }
 
 async function openAuthorize() {
@@ -194,6 +199,7 @@ function buildAddition(): Record<string, unknown> {
     return {
       share_url: form.value.share_url.trim(),
       cookie: form.value.cookie.trim(),
+      passcode: form.value.passcode.trim(),
     }
   }
   return {
@@ -454,6 +460,9 @@ onMounted(async () => {
         <template v-else-if="isQuarkShare">
           <NFormItem label="分享地址">
             <NInput v-model:value="form.share_url" placeholder="https://pan.quark.cn/s/xxxx（可带 ?pwd= 提取码）" />
+          </NFormItem>
+          <NFormItem label="提取码（非必填）">
+            <NInput v-model:value="form.passcode" placeholder="分享链接未带 pwd 时使用此提取码" />
           </NFormItem>
           <NFormItem label="Cookie">
             <NInput
