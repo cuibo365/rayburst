@@ -786,6 +786,8 @@ pub fn run() {
             commands::cloud_storage_toggle,
             commands::cloud_drive_list_path,
             commands::cloud_drive_storage_download,
+            commands::cloud_drive_share_list,
+            commands::cloud_drive_share_download,
         ])
         // ── Window event interception ─────────────────────────────────
         //

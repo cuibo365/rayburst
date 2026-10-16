@@ -165,7 +165,7 @@ impl CloudDriver {
                 d.list(path, &token).await
             }
             CloudDriver::Quark(d) => d.list(db, path).await,
-            CloudDriver::QuarkShare(d) => d.list(db, path).await,
+            CloudDriver::QuarkShare(d) => d.list(Some(db), path).await,
         };
         let status = match &result {
             Ok(_) => "正常".to_string(),
@@ -179,7 +179,7 @@ impl CloudDriver {
                 d.set_status(db, &status).await;
             }
             CloudDriver::QuarkShare(d) => {
-                d.set_status(db, &status).await;
+                d.set_status(Some(db), &status).await;
             }
         }
         result
@@ -764,6 +764,9 @@ impl QuarkShareAddition {
 /// (`share/sharepage/token` -> `share/sharepage/detail` -> `file/download`).
 /// Listing works without a cookie; the download request and the download URL
 /// carry the same cookie + share context (stoken/pwd_id/pdir_fid/share token).
+///
+/// `db` is `Option<&Database>`: mounted storages persist the refreshed stoken
+/// back to the row, while transient "提取分享" sessions keep it in memory only.
 pub struct QuarkShareDriver {
     id: i64,
     addition: QuarkShareAddition,
@@ -778,18 +781,37 @@ impl QuarkShareDriver {
             .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
     }
 
-    async fn persist(&self, db: &Database) -> Result<(), AppError> {
-        db.update_storage_addition(self.id, &self.addition.to_json()?)
-            .await?;
+    /// Transient driver for the "提取分享" flow: borrows the cookie from the
+    /// source storage, no persistence (stoken lives in memory only).
+    pub fn transient(share_url: String, passcode: String, cookie: String) -> Self {
+        Self {
+            id: 0,
+            addition: QuarkShareAddition {
+                share_url,
+                cookie,
+                passcode,
+                stoken: String::new(),
+            },
+        }
+    }
+
+    async fn persist(&self, db: Option<&Database>) -> Result<(), AppError> {
+        if let Some(db) = db {
+            db.update_storage_addition(self.id, &self.addition.to_json()?)
+                .await?;
+        }
         Ok(())
     }
 
-    async fn set_status(&self, db: &Database, status: &str) -> Result<(), AppError> {
-        db.set_storage_status(self.id, status).await
+    async fn set_status(&self, db: Option<&Database>, status: &str) -> Result<(), AppError> {
+        if let Some(db) = db {
+            db.set_storage_status(self.id, status).await?;
+        }
+        Ok(())
     }
 
     /// Re-fetch the share access token from `share/sharepage/token`.
-    async fn refresh_stoken(&mut self, db: &Database) -> Result<String, AppError> {
+    async fn refresh_stoken(&mut self, db: Option<&Database>) -> Result<String, AppError> {
         let (pwd_id, passcode) = self.addition.credentials()?;
         let client = Self::http_client()?;
         let body = serde_json::json!({ "pwd_id": pwd_id, "passcode": passcode });
@@ -823,7 +845,7 @@ impl QuarkShareDriver {
         Ok(stoken)
     }
 
-    async fn ensure_stoken(&mut self, db: &Database) -> Result<String, AppError> {
+    async fn ensure_stoken(&mut self, db: Option<&Database>) -> Result<String, AppError> {
         if !self.addition.stoken.is_empty() {
             return Ok(self.addition.stoken.clone());
         }
@@ -832,7 +854,7 @@ impl QuarkShareDriver {
 
     async fn list(
         &mut self,
-        db: &Database,
+        db: Option<&Database>,
         fid: &str,
     ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
         const SIZE: usize = 50;
@@ -936,7 +958,7 @@ impl QuarkShareDriver {
     /// the cookie used for the request, so that cookie rides along in aria2.
     pub async fn get_dlinks(
         &mut self,
-        db: &Database,
+        db: Option<&Database>,
         files: &[crate::commands::CloudDriveFile],
     ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
         let (pwd_id, _passcode) = self.addition.credentials()?;
@@ -1087,6 +1109,56 @@ async fn load_driver(
     CloudDriver::from_storage(&storage)
 }
 
+/// The cookie of a quark-family storage (`quark` / `quark_share`), reused by
+/// the transient "提取分享" flow for download auth.
+fn storage_quark_cookie(storage: &CloudStorage) -> Result<String, AppError> {
+    match storage.driver.as_str() {
+        "quark" => Ok(QuarkAddition::parse(&storage.addition)?.cookie),
+        "quark_share" => Ok(QuarkShareAddition::parse(&storage.addition)?.cookie),
+        other => Err(AppError::CloudDrive(format!(
+            "「提取分享」仅支持夸克驱动，当前存储为 {other}"
+        ))),
+    }
+}
+
+/// Submit resolved links to aria2 and summarize the outcome.
+async fn submit_links(
+    app: &AppHandle,
+    links: &[(CloudDriveFile, String, Vec<String>)],
+    default_dir: Option<&str>,
+) -> CloudDriveResult {
+    let mut added = 0usize;
+    let mut failed = 0usize;
+    for (file, dlink, headers) in links {
+        let mut options = serde_json::json!({
+            "header": headers,
+            "out": file.name,
+        });
+        if let Some(dir) = default_dir
+            .and_then(|base| resolve_download_dir(base, &file.rel_path))
+        {
+            options["dir"] = serde_json::Value::String(dir);
+        }
+        match submit(app, TaskInput::Uris(vec![dlink.clone()]), options, None).await {
+            Ok(_) => added += 1,
+            Err(e) => {
+                failed += 1;
+                log::warn!("cloud-drive: aria2 submit failed for {}: {e}", file.name);
+            }
+        }
+    }
+    let message = if failed == 0 {
+        format!("已添加 {added} 个文件到下载队列")
+    } else {
+        format!("已添加 {added} 个文件，{failed} 个失败")
+    };
+    CloudDriveResult {
+        message,
+        added,
+        failed,
+    }
+}
+
 /// List a folder inside a storage (routes to the storage's driver).
 #[tauri::command]
 pub async fn cloud_drive_list_path(
@@ -1120,7 +1192,7 @@ pub async fn cloud_drive_storage_download(
     let links = match &mut driver {
         CloudDriver::Baidu(d) => d.get_dlinks(&db.0, &files).await?,
         CloudDriver::Quark(d) => d.get_dlinks(&db.0, &files).await?,
-        CloudDriver::QuarkShare(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::QuarkShare(d) => d.get_dlinks(Some(&db.0), &files).await?,
     };
 
     let default_dir: Option<String> = app
@@ -1136,36 +1208,112 @@ pub async fn cloud_drive_storage_download(
         })
         .filter(|dir| !dir.is_empty());
 
-    let mut added = 0usize;
-    let mut failed = 0usize;
-    for (file, dlink, headers) in &links {
-        let mut options = serde_json::json!({
-            "header": headers,
-            "out": file.name,
-        });
-        if let Some(dir) = default_dir
-            .as_deref()
-            .and_then(|base| resolve_download_dir(base, &file.rel_path))
-        {
-            options["dir"] = serde_json::Value::String(dir);
+    Ok(submit_links(&app, &links, default_dir.as_deref()).await)
+}
+
+// ============================== transient share ("提取分享") ==============================
+
+/// Recursively expand checked share folders into files via a transient driver.
+/// Same rel_path rules as `expand_folders`; no DB involved.
+async fn expand_share_folders(
+    driver: &mut QuarkShareDriver,
+    files: Vec<CloudDriveFile>,
+) -> Result<Vec<CloudDriveFile>, AppError> {
+    let mut result: Vec<CloudDriveFile> = Vec::new();
+    let mut queue: Vec<CloudDriveFile> = files;
+    for f in queue.iter_mut() {
+        f.rel_path = if f.isdir { f.name.clone() } else { String::new() };
+    }
+    let mut requests = 0usize;
+    while let Some(item) = queue.pop() {
+        if !item.isdir {
+            result.push(item);
+            continue;
         }
-        match submit(&app, TaskInput::Uris(vec![dlink.clone()]), options, None).await {
-            Ok(_) => added += 1,
-            Err(e) => {
-                failed += 1;
-                log::warn!("cloud-drive: aria2 submit failed for {}: {e}", file.name);
-            }
+        let children = driver.list(None, &item.path).await?;
+        requests += 1;
+        if requests % 50 == 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        for mut child in children {
+            child.rel_path = if child.isdir {
+                if item.rel_path.is_empty() {
+                    child.name.clone()
+                } else {
+                    format!("{}/{}", item.rel_path, child.name)
+                }
+            } else {
+                item.rel_path.clone()
+            };
+            queue.push(child);
         }
     }
-    let message = if failed == 0 {
-        format!("已添加 {added} 个文件到下载队列")
-    } else {
-        format!("已添加 {added} 个文件，{failed} 个失败")
-    };
-    Ok(CloudDriveResult {
-        message,
-        added,
-        failed,
-    })
+    Ok(result)
+}
+
+/// Browse a share without adding a storage: borrows the source storage's
+/// cookie for auth and keeps stoken in memory.
+#[tauri::command]
+pub async fn cloud_drive_share_list(
+    db: State<'_, DatabaseState>,
+    storage_id: i64,
+    share_url: String,
+    passcode: String,
+    path: String,
+) -> Result<Vec<CloudDriveFile>, AppError> {
+    let storage = db
+        .0
+        .get_storage(storage_id)
+        .await?
+        .ok_or_else(|| AppError::CloudDrive("存储不存在".into()))?;
+    if storage.disabled {
+        return Err(AppError::CloudDrive("该存储已被禁用".into()));
+    }
+    let cookie = storage_quark_cookie(&storage)?;
+    let mut driver = QuarkShareDriver::transient(share_url, passcode, cookie);
+    driver.list(None, &path).await
+}
+
+/// Download checked files from a transient share (提取分享).
+#[tauri::command]
+pub async fn cloud_drive_share_download(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    storage_id: i64,
+    share_url: String,
+    passcode: String,
+    files: Vec<CloudDriveFile>,
+) -> Result<CloudDriveResult, AppError> {
+    if files.is_empty() {
+        return Err(AppError::CloudDrive("没有选择文件".into()));
+    }
+    let storage = db
+        .0
+        .get_storage(storage_id)
+        .await?
+        .ok_or_else(|| AppError::CloudDrive("存储不存在".into()))?;
+    if storage.disabled {
+        return Err(AppError::CloudDrive("该存储已被禁用".into()));
+    }
+    let cookie = storage_quark_cookie(&storage)?;
+    let mut driver = QuarkShareDriver::transient(share_url, passcode, cookie);
+    let files = expand_share_folders(&mut driver, files).await?;
+    if files.is_empty() {
+        return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
+    }
+    let links = driver.get_dlinks(None, &files).await?;
+    let default_dir: Option<String> = app
+        .store("config.json")
+        .ok()
+        .and_then(|store| store.get("preferences"))
+        .and_then(|prefs| {
+            prefs
+                .get("dir")?
+                .as_str()
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .filter(|dir| !dir.is_empty());
+    Ok(submit_links(&app, &links, default_dir.as_deref()).await)
 }
 

@@ -8,7 +8,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { NButton, NCheckbox, NEmpty, NIcon, NSpin, useMessage } from 'naive-ui'
+import { NButton, NCheckbox, NEmpty, NForm, NFormItem, NIcon, NInput, NModal, NSpin, useMessage } from 'naive-ui'
 import {
   ChevronForwardOutline,
   DocumentOutline,
@@ -61,7 +61,22 @@ const downloading = ref(false)
 /** Item id currently being submitted by its row button, to disable just that row. */
 const downloadingId = ref<string | null>(null)
 
-const isRoot = computed(() => activeStorage.value === null)
+// --- transient share ("提取分享") state ---
+const shareDialog = ref(false)
+const shareSaving = ref(false)
+const shareForm = ref({ shareUrl: '', passcode: '' })
+/** Source storage whose cookie authorizes the transient share downloads. */
+const shareSourceId = ref<number | null>(null)
+/** Active transient share session (non-null = browsing a share, no storage). */
+const shareSession = ref<{ storageId: number; shareUrl: string; passcode: string } | null>(null)
+
+const shareLabel = computed(() => {
+  const url = shareSession.value?.shareUrl ?? ''
+  const code = url.split('/s/')[1]?.split('?')[0] ?? ''
+  return code || '分享'
+})
+
+const isRoot = computed(() => activeStorage.value === null && shareSession.value === null)
 const currentPath = computed(() => {
   if (isRoot.value) return '/'
   if (crumbSegs.value.length === 0) return rootPath.value
@@ -187,14 +202,21 @@ function enterStorage(s: CloudStorage) {
 
 // --- storage level: browse a folder ---
 async function loadDir(fullPath: string) {
-  if (!activeStorage.value) return
+  if (!activeStorage.value && !shareSession.value) return
   loading.value = true
   loadError.value = ''
   try {
-    const list = await invoke<DriveFile[]>('cloud_drive_list_path', {
-      storageId: activeStorage.value.id,
-      path: fullPath,
-    })
+    const list = shareSession.value
+      ? await invoke<DriveFile[]>('cloud_drive_share_list', {
+          storageId: shareSession.value.storageId,
+          shareUrl: shareSession.value.shareUrl,
+          passcode: shareSession.value.passcode,
+          path: fullPath,
+        })
+      : await invoke<DriveFile[]>('cloud_drive_list_path', {
+          storageId: activeStorage.value!.id,
+          path: fullPath,
+        })
     files.value = list
     selected.value = new Set()
   } catch (err) {
@@ -209,6 +231,7 @@ async function loadDir(fullPath: string) {
 function goHome() {
   if (isRoot.value) return
   activeStorage.value = null
+  shareSession.value = null
   browseStack.value = []
   files.value = []
   selected.value = new Set()
@@ -216,7 +239,7 @@ function goHome() {
 }
 
 function goToStorageRoot() {
-  if (!activeStorage.value) return
+  if (!activeStorage.value && !shareSession.value) return
   browseStack.value = []
   void loadDir(rootPath.value)
 }
@@ -252,17 +275,24 @@ async function refresh() {
 }
 
 async function submitDownload(list: DriveFile[], successMsg: (n: number) => string) {
-  const r = (await invoke('cloud_drive_storage_download', {
-    storageId: activeStorage.value!.id,
-    files: list,
-    currentDir: currentPath.value,
-  })) as { message?: string }
+  const r = shareSession.value
+    ? ((await invoke('cloud_drive_share_download', {
+        storageId: shareSession.value.storageId,
+        shareUrl: shareSession.value.shareUrl,
+        passcode: shareSession.value.passcode,
+        files: list,
+      })) as { message?: string })
+    : ((await invoke('cloud_drive_storage_download', {
+        storageId: activeStorage.value!.id,
+        files: list,
+        currentDir: currentPath.value,
+      })) as { message?: string })
   message.success(r?.message || successMsg(list.length))
 }
 
 async function startDownload() {
   const list = selectedFiles.value
-  if (!list.length || !activeStorage.value) {
+  if (!list.length || (!activeStorage.value && !shareSession.value)) {
     message.warning('请先勾选要下载的文件')
     return
   }
@@ -278,7 +308,7 @@ async function startDownload() {
 
 /** Download a single row (folder contents are expanded by the backend). */
 async function downloadOne(f: DriveFile) {
-  if (!activeStorage.value || downloadingId.value !== null) return
+  if ((!activeStorage.value && !shareSession.value) || downloadingId.value !== null) return
   downloadingId.value = f.id
   try {
     await submitDownload([f], () => `已添加「${f.name}」到下载队列`)
@@ -286,6 +316,41 @@ async function downloadOne(f: DriveFile) {
     message.error(errMsg(err))
   } finally {
     downloadingId.value = null
+  }
+}
+
+// --- transient share ("提取分享") ---
+function openShareDialog(s: CloudStorage) {
+  shareSourceId.value = s.id
+  shareForm.value = { shareUrl: '', passcode: '' }
+  shareDialog.value = true
+}
+
+async function confirmShare() {
+  const url = shareForm.value.shareUrl.trim()
+  if (!url) {
+    message.warning('请填写夸克分享地址')
+    return
+  }
+  shareSaving.value = true
+  try {
+    shareSession.value = {
+      storageId: shareSourceId.value!,
+      shareUrl: url,
+      passcode: shareForm.value.passcode.trim(),
+    }
+    shareDialog.value = false
+    activeStorage.value = null
+    browseStack.value = []
+    rootPath.value = '0'
+    files.value = []
+    selected.value = new Set()
+    loadError.value = ''
+    await loadDir('0')
+  } catch (err) {
+    message.error(errMsg(err))
+  } finally {
+    shareSaving.value = false
   }
 }
 
@@ -316,6 +381,28 @@ onMounted(async () => {
             @click="goToStorageRoot"
           >
             {{ activeStorage.mount_path }}
+          </button>
+          <template v-for="(seg, i) in crumbSegs" :key="seg + i">
+            <NIcon :size="14" class="drive-crumb-sep" aria-hidden="true"><ChevronForwardOutline /></NIcon>
+            <button
+              type="button"
+              class="drive-crumb"
+              :class="{ 'drive-crumb--current': i === crumbSegs.length - 1 }"
+              @click="goToCrumb(i)"
+            >
+              {{ seg }}
+            </button>
+          </template>
+        </template>
+        <template v-else-if="shareSession">
+          <NIcon :size="14" class="drive-crumb-sep" aria-hidden="true"><ChevronForwardOutline /></NIcon>
+          <button
+            type="button"
+            class="drive-crumb"
+            :class="{ 'drive-crumb--current': crumbSegs.length === 0 }"
+            @click="goToStorageRoot"
+          >
+            {{ shareLabel }}
           </button>
           <template v-for="(seg, i) in crumbSegs" :key="seg + i">
             <NIcon :size="14" class="drive-crumb-sep" aria-hidden="true"><ChevronForwardOutline /></NIcon>
@@ -370,7 +457,7 @@ onMounted(async () => {
               <th class="drive-col-size">大小</th>
               <th class="drive-col-type">类型</th>
               <th class="drive-col-time">修改时间</th>
-              <th v-if="!isRoot" class="drive-col-action">操作</th>
+              <th class="drive-col-action">操作</th>
             </tr>
           </thead>
           <tbody v-if="isRoot">
@@ -395,6 +482,16 @@ onMounted(async () => {
               <td class="drive-col-size drive-muted">—</td>
               <td class="drive-col-type drive-muted">文件夹</td>
               <td class="drive-col-time drive-muted">{{ fmtDbTime(s.modified) }}</td>
+              <td class="drive-col-action" @click.stop>
+                <NButton
+                  v-if="s.driver === 'quark' || s.driver === 'quark_share'"
+                  size="tiny"
+                  secondary
+                  @click="openShareDialog(s)"
+                >
+                  提取分享
+                </NButton>
+              </td>
             </tr>
           </tbody>
           <tbody v-else>
@@ -433,6 +530,26 @@ onMounted(async () => {
         </table>
       </NSpin>
     </div>
+
+    <NModal
+      v-model:show="shareDialog"
+      preset="dialog"
+      title="提取夸克分享"
+      positive-text="进入"
+      negative-text="取消"
+      :loading="shareSaving"
+      @positive-click="confirmShare"
+    >
+      <div class="share-dialog-tip">直接浏览该分享并下载，无需添加存储；下载复用所选存储的 Cookie。</div>
+      <NForm label-placement="top">
+        <NFormItem label="分享地址">
+          <NInput v-model:value="shareForm.shareUrl" placeholder="https://pan.quark.cn/s/xxxx" />
+        </NFormItem>
+        <NFormItem label="提取码（非必填）">
+          <NInput v-model:value="shareForm.passcode" placeholder="有提取码则填写" />
+        </NFormItem>
+      </NForm>
+    </NModal>
   </div>
 </template>
 
@@ -547,8 +664,13 @@ onMounted(async () => {
   text-align: right;
 }
 .drive-col-action {
-  width: 84px;
+  width: 110px;
   text-align: right;
+}
+.share-dialog-tip {
+  color: var(--m3-on-surface-variant);
+  font-size: 13px;
+  margin-bottom: 10px;
 }
 .drive-name {
   border: none;
