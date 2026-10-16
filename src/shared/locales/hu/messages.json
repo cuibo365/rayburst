@@ -951,19 +951,7 @@
     "download-packages": "Csomagok letöltése"
   },
   "cloudDrive": {
-    "pageHint": "Pick a cloud drive service. Baidu Netdisk opens inside the app for browsing and downloading",
-    "baidu": "Baidu Netdisk",
-    "quark": "Quark Netdisk",
-    "netdisk115": "115 Netdisk",
-    "baiduDesc": "Open Baidu Netdisk web inside the app; check files and download them to Rayburst",
-    "quarkDesc": "Open the Quark Netdisk web version in your default browser",
-    "netdisk115Desc": "Open the 115 Netdisk web version in your default browser",
-    "openInApp": "Open in app",
-    "openWeb": "Open web version",
-    "openFailed": "Failed to open the drive, please retry",
-    "baiduApp": "Baidu Netdisk (In-App)",
-    "baiduAppDesc": "Native UI. Scan to log in, browse and download to Rayburst",
-    "openApp": "Open In-App",
-    "backToCards": "Back to drives"
+    "home": "首页",
+    "storage": "存储"
   }
 }

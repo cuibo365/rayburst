@@ -85,7 +85,7 @@ const taskDestinations = useTaskDestinations()
 const pageTitle = computed(() =>
   isTaskPage.value
     ? (taskDestinations.value.find((item) => item.key === (route.params.status || 'all'))?.label ?? t('task.scope-all'))
-    : route.name === 'cloud-drive'
+    : route.matched.some((record) => record.name === 'cloud-drive')
       ? t('navigation.cloud-drive')
       : t('navigation.settings'),
 )

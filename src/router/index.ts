@@ -22,6 +22,28 @@ const router = createRouter({
           path: '/cloud-drive',
           name: 'cloud-drive',
           component: () => import('@/views/CloudDriveView.vue'),
+          children: [
+            {
+              path: '',
+              redirect: { name: 'cloud-drive-home' },
+            },
+            {
+              path: 'home',
+              name: 'cloud-drive-home',
+              component: () => import('@/views/DriveHomeView.vue'),
+            },
+            {
+              path: 'storage',
+              name: 'cloud-drive-storage',
+              component: () => import('@/views/StorageManagerView.vue'),
+            },
+            {
+              path: 'browse/:storageId',
+              name: 'cloud-drive-browse',
+              component: () => import('@/views/DriveBrowserView.vue'),
+              props: true,
+            },
+          ],
         },
         {
           path: '/preference',

@@ -951,19 +951,7 @@
     "download-packages": "下载安装包"
   },
   "cloudDrive": {
-    "pageHint": "选择网盘服务，百度网盘可直接在应用内浏览与下载文件",
-    "baidu": "百度网盘",
-    "quark": "夸克网盘",
-    "netdisk115": "115网盘",
-    "baiduDesc": "在应用内打开百度网盘网页版，勾选文件即可下载到 Rayburst",
-    "quarkDesc": "在默认浏览器中打开夸克网盘网页版",
-    "netdisk115Desc": "在默认浏览器中打开 115 网盘网页版",
-    "openInApp": "在应用内打开",
-    "openWeb": "打开网页版",
-    "openFailed": "打开网盘失败，请重试",
-    "baiduApp": "百度网盘（应用内）",
-    "baiduAppDesc": "自研界面，扫码登录后浏览文件并下载到 Rayburst",
-    "openApp": "应用内打开",
-    "backToCards": "返回网盘入口"
+    "home": "首页",
+    "storage": "存储"
   }
 }

@@ -779,13 +779,13 @@ pub fn run() {
             commands::aria2_resume_eligible,
             commands::system_shutdown,
             commands::cancel_shutdown,
-            commands::cloud_drive_baidu_download,
-            commands::cloud_drive_baidu_login_status,
-            commands::cloud_drive_baidu_logout,
-            commands::cloud_drive_baidu_list,
-            commands::cloud_drive_baidu_save_token,
-            commands::cloud_drive_baidu_oauth_url,
-            commands::cloud_drive_baidu_oauth_status,
+            commands::cloud_storage_list,
+            commands::cloud_storage_add,
+            commands::cloud_storage_update,
+            commands::cloud_storage_delete,
+            commands::cloud_storage_toggle,
+            commands::cloud_drive_list_path,
+            commands::cloud_drive_storage_download,
         ])
         // ── Window event interception ─────────────────────────────────
         //

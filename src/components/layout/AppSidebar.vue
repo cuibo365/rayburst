@@ -20,7 +20,7 @@ const taskDestinations = useTaskDestinations()
 const tasks = useTaskStore()
 const preferences = usePreferenceStore()
 const isSettings = computed(() => route.matched.some((record) => record.name === 'preference'))
-const isCloudDrive = computed(() => route.name === 'cloud-drive')
+const isCloudDrive = computed(() => route.matched.some((record) => record.name === 'cloud-drive'))
 </script>
 
 <template>

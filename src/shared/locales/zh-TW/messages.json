@@ -951,19 +951,7 @@
     "download-packages": "下載安裝套件"
   },
   "cloudDrive": {
-    "pageHint": "選擇網盤服務，百度網盤可直接在應用內瀏覽與下載檔案",
-    "baidu": "百度網盤",
-    "quark": "夸克網盤",
-    "netdisk115": "115網盤",
-    "baiduDesc": "在應用內開啟百度網盤網頁版，勾選檔案即可下載到 Rayburst",
-    "quarkDesc": "在預設瀏覽器中開啟夸克網盤網頁版",
-    "netdisk115Desc": "在預設瀏覽器中開啟 115 網盤網頁版",
-    "openInApp": "在應用內開啟",
-    "openWeb": "開啟網頁版",
-    "openFailed": "打開網盤失敗，請重試",
-    "baiduApp": "百度网盘（应用内）",
-    "baiduAppDesc": "自研界面，扫码登录后浏览文件并下载到 Rayburst",
-    "openApp": "应用内打开",
-    "backToCards": "返回网盘入口"
+    "home": "首页",
+    "storage": "存储"
   }
 }
