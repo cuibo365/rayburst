@@ -16,7 +16,7 @@ const router = useRouter()
 
 const selectedTab = computed(() => {
   const name = String(route.name ?? '')
-  if (name === 'cloud-drive-home' || name === 'cloud-drive-browse') return 'cloud-drive-home'
+  if (name === 'cloud-drive-home') return 'cloud-drive-home'
   if (name === 'cloud-drive-storage') return 'cloud-drive-storage'
   return 'cloud-drive-home'
 })

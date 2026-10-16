@@ -1,20 +1,22 @@
 <script setup lang="ts">
 /**
- * Storage browser: generic file list view for a mounted storage
- * (adapted from the legacy BaiduDriveApp list UI). Commands are
- * storage-scoped (`cloud_drive_list_path` / `cloud_drive_storage_download`),
- * and the browse root is the storage's addition.root_path.
+ * Drive explorer (首页): a single unified file-list page.
+ * - Root level: all mounted storages rendered as folder rows (same table style).
+ * - Storage level: browse a storage from its addition.root_path.
+ * Breadcrumb: 首页 / <storage> / <subdirs...>, so the top nav always has a
+ * "首页" level. Download is only available inside a storage.
  */
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { NButton, NCheckbox, NEmpty, NIcon, NSpin, useMessage } from 'naive-ui'
 import {
-  ChevronBackOutline,
   ChevronForwardOutline,
+  CloudOutline,
   DocumentOutline,
   DownloadOutline,
   FolderOpenOutline,
+  HomeOutline,
+  RefreshOutline,
 } from '@vicons/ionicons5'
 
 interface DriveFile {
@@ -40,25 +42,28 @@ interface CloudStorage {
   modified: string
 }
 
-const props = defineProps<{ storageId: string }>()
-const router = useRouter()
 const message = useMessage()
 
-const storage = ref<CloudStorage | null>(null)
+// --- state ---
+const storages = ref<CloudStorage[]>([])
+const activeStorage = ref<CloudStorage | null>(null)
 const rootPath = ref('/')
-const crumbPath = ref<string[]>([])
+const crumbSegs = ref<string[]>([])
 const files = ref<DriveFile[]>([])
 const loading = ref(false)
+const loadError = ref('')
 const selected = ref<Set<number>>(new Set())
 const downloading = ref(false)
-const loadError = ref('')
 
+const isRoot = computed(() => activeStorage.value === null)
 const currentPath = computed(() => {
-  if (crumbPath.value.length === 0) return rootPath.value
-  return (rootPath.value === '/' ? '' : rootPath.value) + '/' + crumbPath.value.join('/')
+  if (isRoot.value) return '/'
+  if (crumbSegs.value.length === 0) return rootPath.value
+  return (rootPath.value === '/' ? '' : rootPath.value) + '/' + crumbSegs.value.join('/')
 })
 const selectedFiles = computed(() => files.value.filter((f) => selected.value.has(f.fs_id)))
 
+// --- formatting ---
 function fmtSize(n: number): string {
   if (!n) return '-'
   if (n < 1024) return `${n} B`
@@ -89,6 +94,13 @@ function fmtTime(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+function fmtDbTime(raw: string): string {
+  const d = new Date(raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z')
+  if (Number.isNaN(d.getTime())) return raw
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 function errMsg(e: unknown): string {
   if (e instanceof Error) return e.message || '操作失败'
   if (typeof e === 'string' && e) return e
@@ -104,22 +116,52 @@ function errMsg(e: unknown): string {
   return '操作失败，请查看日志'
 }
 
+// --- root level: all storages ---
+async function loadStorages() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    storages.value = await invoke<CloudStorage[]>('cloud_storage_list')
+  } catch (err) {
+    loadError.value = errMsg(err)
+    storages.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+function enterStorage(s: CloudStorage) {
+  if (s.disabled) return
+  activeStorage.value = s
+  let root = '/'
+  try {
+    const addition = JSON.parse(s.addition) as { root_path?: string }
+    root = addition.root_path?.trim() || '/'
+  } catch {
+    root = '/'
+  }
+  rootPath.value = root
+  crumbSegs.value = []
+  void loadDir(root)
+}
+
+// --- storage level: browse a folder ---
 async function loadDir(fullPath: string) {
+  if (!activeStorage.value) return
   loading.value = true
   loadError.value = ''
   try {
     const list = await invoke<DriveFile[]>('cloud_drive_list_path', {
-      storageId: Number(props.storageId),
+      storageId: activeStorage.value.id,
       path: fullPath,
     })
     files.value = list
     selected.value = new Set()
     const rel =
       fullPath === '/' ? '' : fullPath.replace(rootPath.value === '/' ? '/' : rootPath.value, '').replace(/^\/+/, '')
-    crumbPath.value = rel ? rel.split('/').filter(Boolean) : []
+    crumbSegs.value = rel ? rel.split('/').filter(Boolean) : []
   } catch (err) {
-    const msg = errMsg(err)
-    loadError.value = msg
+    loadError.value = errMsg(err)
     files.value = []
     selected.value = new Set()
   } finally {
@@ -127,11 +169,26 @@ async function loadDir(fullPath: string) {
   }
 }
 
+function goHome() {
+  if (isRoot.value) return
+  activeStorage.value = null
+  crumbSegs.value = []
+  files.value = []
+  selected.value = new Set()
+  void loadStorages()
+}
+
+function goToStorageRoot() {
+  if (!activeStorage.value) return
+  void loadDir(rootPath.value)
+}
+
 function goToCrumb(i: number) {
+  // i = -1 -> storage root; 0.. -> segment
   const target =
     i < 0
       ? rootPath.value
-      : (rootPath.value === '/' ? '' : rootPath.value) + '/' + crumbPath.value.slice(0, i + 1).join('/')
+      : (rootPath.value === '/' ? '' : rootPath.value) + '/' + crumbSegs.value.slice(0, i + 1).join('/')
   void loadDir(target)
 }
 
@@ -146,16 +203,21 @@ function toggle(f: DriveFile) {
   selected.value = s
 }
 
+async function refresh() {
+  if (isRoot.value) await loadStorages()
+  else await loadDir(currentPath.value)
+}
+
 async function startDownload() {
   const list = selectedFiles.value
-  if (!list.length) {
+  if (!list.length || !activeStorage.value) {
     message.warning('请先勾选要下载的文件')
     return
   }
   downloading.value = true
   try {
     const r = (await invoke('cloud_drive_storage_download', {
-      storageId: Number(props.storageId),
+      storageId: activeStorage.value.id,
       files: list,
       currentDir: currentPath.value,
     })) as { message?: string }
@@ -167,70 +229,51 @@ async function startDownload() {
   }
 }
 
-function goBack() {
-  void router.push({ name: 'cloud-drive-home' })
-}
-
-onMounted(async () => {
-  try {
-    const all = await invoke<CloudStorage[]>('cloud_storage_list')
-    const found = all.find((s) => String(s.id) === props.storageId)
-    if (!found) {
-      loadError.value = '存储不存在或已被删除'
-      return
-    }
-    storage.value = found
-    let root = '/'
-    try {
-      const addition = JSON.parse(found.addition) as { root_path?: string }
-      root = addition.root_path?.trim() || '/'
-    } catch {
-      root = '/'
-    }
-    rootPath.value = root
-    if (found.disabled) {
-      loadError.value = '该存储已被禁用，请到「存储」页启用'
-      return
-    }
-    await loadDir(root)
-  } catch (err) {
-    loadError.value = errMsg(err)
-  }
+onMounted(() => {
+  void loadStorages()
 })
 </script>
 
 <template>
-  <div class="drive-browser">
+  <div class="drive-explorer">
     <div class="drive-toolbar">
-      <NButton size="small" secondary @click="goBack">
-        <template #icon
-          ><NIcon><ChevronBackOutline /></NIcon
-        ></template>
-        返回
-      </NButton>
       <div class="drive-crumbs">
-        <button
-          type="button"
-          class="drive-crumb"
-          :class="{ 'drive-crumb--root': crumbPath.length === 0 }"
-          @click="goToCrumb(-1)"
-        >
-          {{ storage?.mount_path ?? '网盘' }}
+        <button type="button" class="drive-crumb" :class="{ 'drive-crumb--current': isRoot }" @click="goHome">
+          <NIcon :size="14" aria-hidden="true" class="drive-crumb-home-icon"><HomeOutline /></NIcon>
+          首页
         </button>
-        <template v-for="(seg, i) in crumbPath" :key="seg + i">
+        <template v-if="activeStorage">
           <NIcon :size="14" class="drive-crumb-sep" aria-hidden="true"><ChevronForwardOutline /></NIcon>
           <button
             type="button"
             class="drive-crumb"
-            :class="{ 'drive-crumb--current': i === crumbPath.length - 1 }"
-            @click="goToCrumb(i)"
+            :class="{ 'drive-crumb--current': crumbSegs.length === 0 }"
+            @click="goToStorageRoot"
           >
-            {{ seg }}
+            {{ activeStorage.mount_path }}
           </button>
+          <template v-for="(seg, i) in crumbSegs" :key="seg + i">
+            <NIcon :size="14" class="drive-crumb-sep" aria-hidden="true"><ChevronForwardOutline /></NIcon>
+            <button
+              type="button"
+              class="drive-crumb"
+              :class="{ 'drive-crumb--current': i === crumbSegs.length - 1 }"
+              @click="goToCrumb(i)"
+            >
+              {{ seg }}
+            </button>
+          </template>
         </template>
       </div>
       <div class="drive-toolbar-actions">
+        <NButton size="small" secondary @click="refresh">
+          <template #icon
+            ><NIcon><RefreshOutline /></NIcon
+          ></template>
+          刷新
+        </NButton>
         <NButton
+          v-if="!isRoot"
           size="small"
           type="primary"
           :disabled="!selectedFiles.length"
@@ -247,23 +290,51 @@ onMounted(async () => {
 
     <div class="drive-list">
       <NSpin :show="loading">
-        <NEmpty v-if="!loading && loadError" :description="loadError" class="drive-empty">
-          <template #extra>
-            <NButton size="small" secondary @click="goBack">返回存储列表</NButton>
-          </template>
-        </NEmpty>
-        <NEmpty v-else-if="!loading && files.length === 0" description="此目录为空" class="drive-empty" />
+        <NEmpty
+          v-if="!loading && isRoot && storages.length === 0"
+          description="暂无存储，请到「存储」页添加"
+          class="drive-empty"
+        />
+        <NEmpty v-else-if="!loading && loadError" :description="loadError" class="drive-empty" />
+        <NEmpty v-else-if="!loading && !isRoot && files.length === 0" description="此目录为空" class="drive-empty" />
         <table v-else class="drive-table">
           <thead>
             <tr>
               <th class="drive-col-check"></th>
-              <th>名称</th>
+              <th>文件名</th>
               <th class="drive-col-size">大小</th>
               <th class="drive-col-type">类型</th>
               <th class="drive-col-time">修改时间</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody v-if="isRoot">
+            <tr
+              v-for="s in storages"
+              :key="s.id"
+              class="drive-row"
+              :class="{ 'drive-row--disabled': s.disabled, 'drive-row--sel': false }"
+              tabindex="0"
+              :aria-label="s.mount_path"
+              @click="enterStorage(s)"
+              @keydown.enter="enterStorage(s)"
+            >
+              <td class="drive-col-check"></td>
+              <td>
+                <span class="drive-name" :class="{ 'drive-name--dir': !s.disabled }">
+                  <NIcon :size="17" aria-hidden="true" class="drive-name-icon">
+                    <FolderOpenOutline v-if="!s.disabled" />
+                    <CloudOutline v-else />
+                  </NIcon>
+                  <span class="drive-name-text">{{ s.mount_path }}</span>
+                  <span v-if="s.disabled" class="drive-name-badge">已禁用</span>
+                </span>
+              </td>
+              <td class="drive-col-size drive-muted">—</td>
+              <td class="drive-col-type drive-muted">文件夹</td>
+              <td class="drive-col-time drive-muted">{{ fmtDbTime(s.modified) }}</td>
+            </tr>
+          </tbody>
+          <tbody v-else>
             <tr
               v-for="f in files"
               :key="f.fs_id"
@@ -294,7 +365,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.drive-browser {
+.drive-explorer {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -328,19 +399,23 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .drive-crumb:hover {
   background: rgba(128, 128, 128, 0.15);
 }
-.drive-crumb--root {
-  color: var(--m3-on-surface);
-  font-weight: 600;
-}
 .drive-crumb--current {
   color: var(--m3-primary, #3b82f6);
+  font-weight: 600;
+}
+.drive-crumb-home-icon {
+  color: var(--m3-on-surface-variant);
 }
 .drive-crumb-sep {
   color: var(--m3-on-surface-variant);
+  flex: none;
 }
 .drive-toolbar-actions {
   display: flex;
@@ -373,6 +448,20 @@ onMounted(async () => {
 .drive-table td {
   padding: 7px 12px;
   border-bottom: 1px solid rgba(128, 128, 128, 0.1);
+}
+.drive-row {
+  cursor: pointer;
+}
+.drive-row:focus-visible {
+  outline: 2px solid var(--m3-primary);
+  outline-offset: -2px;
+}
+.drive-row--disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.drive-row--disabled:hover td {
+  background: transparent !important;
 }
 .drive-row--sel {
   background: rgba(59, 130, 246, 0.08);
@@ -417,6 +506,15 @@ onMounted(async () => {
 }
 .drive-name--dir .drive-name-icon {
   color: #f0a020;
+}
+.drive-name-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--m3-on-surface-variant);
+  background: rgba(128, 128, 128, 0.18);
+  flex: none;
 }
 .drive-muted {
   color: var(--m3-on-surface-variant);
