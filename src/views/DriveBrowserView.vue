@@ -54,6 +54,8 @@ const loading = ref(false)
 const loadError = ref('')
 const selected = ref<Set<number>>(new Set())
 const downloading = ref(false)
+/** fs_id currently being submitted by its row button, to disable just that row. */
+const downloadingId = ref<number | null>(null)
 
 const isRoot = computed(() => activeStorage.value === null)
 const currentPath = computed(() => {
@@ -230,6 +232,15 @@ async function refresh() {
   else await loadDir(currentPath.value)
 }
 
+async function submitDownload(list: DriveFile[], successMsg: (n: number) => string) {
+  const r = (await invoke('cloud_drive_storage_download', {
+    storageId: activeStorage.value!.id,
+    files: list,
+    currentDir: currentPath.value,
+  })) as { message?: string }
+  message.success(r?.message || successMsg(list.length))
+}
+
 async function startDownload() {
   const list = selectedFiles.value
   if (!list.length || !activeStorage.value) {
@@ -238,16 +249,24 @@ async function startDownload() {
   }
   downloading.value = true
   try {
-    const r = (await invoke('cloud_drive_storage_download', {
-      storageId: activeStorage.value.id,
-      files: list,
-      currentDir: currentPath.value,
-    })) as { message?: string }
-    message.success(r?.message || `已添加 ${list.length} 个文件到下载队列`)
+    await submitDownload(list, (n) => `已添加 ${n} 个文件到下载队列`)
   } catch (err) {
     message.error(errMsg(err))
   } finally {
     downloading.value = false
+  }
+}
+
+/** Download a single row (folder contents are expanded by the backend). */
+async function downloadOne(f: DriveFile) {
+  if (!activeStorage.value || downloadingId.value !== null) return
+  downloadingId.value = f.fs_id
+  try {
+    await submitDownload([f], () => `已添加「${f.name}」到下载队列`)
+  } catch (err) {
+    message.error(errMsg(err))
+  } finally {
+    downloadingId.value = null
   }
 }
 
@@ -310,7 +329,7 @@ onMounted(async () => {
           <template #icon
             ><NIcon><DownloadOutline /></NIcon
           ></template>
-          下载到 Rayburst{{ selectedFiles.length ? `（${selectedFiles.length}）` : '' }}
+          批量下载<span v-if="selectedFiles.length">（{{ selectedFiles.length }}）</span>
         </NButton>
       </div>
     </div>
@@ -332,6 +351,7 @@ onMounted(async () => {
               <th class="drive-col-size">大小</th>
               <th class="drive-col-type">类型</th>
               <th class="drive-col-time">修改时间</th>
+              <th v-if="!isRoot" class="drive-col-action">操作</th>
             </tr>
           </thead>
           <tbody v-if="isRoot">
@@ -383,6 +403,20 @@ onMounted(async () => {
               <td class="drive-col-size drive-muted">{{ f.isdir ? '—' : fmtSize(f.size) }}</td>
               <td class="drive-col-type drive-muted">{{ fmtType(f) }}</td>
               <td class="drive-col-time drive-muted">{{ fmtTime(f.mtime) }}</td>
+              <td class="drive-col-action">
+                <NButton
+                  size="tiny"
+                  secondary
+                  :loading="downloadingId === f.fs_id"
+                  :disabled="downloadingId !== null && downloadingId !== f.fs_id"
+                  @click="downloadOne(f)"
+                >
+                  <template #icon
+                    ><NIcon><DownloadOutline /></NIcon
+                  ></template>
+                  下载
+                </NButton>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -506,6 +540,10 @@ onMounted(async () => {
 }
 .drive-col-time {
   width: 150px;
+  text-align: right;
+}
+.drive-col-action {
+  width: 84px;
   text-align: right;
 }
 .drive-name {

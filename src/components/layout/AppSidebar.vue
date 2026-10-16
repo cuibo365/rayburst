@@ -54,7 +54,7 @@ const isCloudDrive = computed(() => route.matched.some((record) => record.name =
       <MTooltip placement="right" :disabled="!compact">
         <template #trigger>
           <RouterLink
-            :to="{ name: 'cloud-drive' }"
+            :to="{ name: 'cloud-drive-home' }"
             class="sidebar-item"
             :class="{ active: isCloudDrive }"
             :aria-label="t('navigation.cloud-drive')"
