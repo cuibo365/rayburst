@@ -282,6 +282,7 @@ impl BaiduDriver {
                     isdir: f.isdir != 0,
                     mtime: f.mtime,
                     category: f.category,
+                    rel_path: String::new(),
                 });
             }
             if out.len() < (page + 1) * LIMIT {
@@ -367,6 +368,9 @@ use crate::commands::cloud_drive::{resolve_download_dir, sanitize_dir_path, Clou
 use crate::services::downloads::{submit, TaskInput};
 
 /// Recursively expand checked folders into contained files via the driver.
+/// Populates each file's `rel_path` with the dir chain rooted at the checked
+/// (level-1) item: a checked folder `A` becomes `A`, its sub-folder `B` becomes
+/// `A/B`, files land in their parent chain; level-1 files keep an empty chain.
 async fn expand_folders(
     driver: &mut CloudDriver,
     db: &Database,
@@ -374,6 +378,9 @@ async fn expand_folders(
 ) -> Result<Vec<CloudDriveFile>, AppError> {
     let mut result: Vec<CloudDriveFile> = Vec::new();
     let mut queue: Vec<CloudDriveFile> = files;
+    for f in queue.iter_mut() {
+        f.rel_path = if f.isdir { f.name.clone() } else { String::new() };
+    }
     let mut requests = 0usize;
     while let Some(item) = queue.pop() {
         if !item.isdir {
@@ -386,7 +393,18 @@ async fn expand_folders(
         if requests % 50 == 0 {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
-        queue.extend(children);
+        for mut child in children {
+            child.rel_path = if child.isdir {
+                if item.rel_path.is_empty() {
+                    child.name.clone()
+                } else {
+                    format!("{}/{}", item.rel_path, child.name)
+                }
+            } else {
+                item.rel_path.clone()
+            };
+            queue.push(child);
+        }
     }
     Ok(result)
 }
@@ -463,7 +481,7 @@ pub async fn cloud_drive_storage_download(
         });
         if let Some(dir) = default_dir
             .as_deref()
-            .and_then(|base| resolve_download_dir(base, current_dir.as_deref(), &file.path))
+            .and_then(|base| resolve_download_dir(base, &file.rel_path))
         {
             options["dir"] = serde_json::Value::String(dir);
         }

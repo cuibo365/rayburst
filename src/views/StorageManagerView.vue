@@ -50,6 +50,41 @@ const DEFAULT_CLIENT_ID = 'hq9yQ9w9kR4YHj1kyYafLygVocobh7Sf'
 const DEFAULT_CLIENT_SECRET = 'YH2VpZcFJHYNnV6vLfHQXDBhcE7ZChyE'
 const CALLBACK_URL = 'https://alistgo.com/tool/baidu/callback'
 
+function errMsg(e: unknown): string {
+  if (e instanceof Error) return e.message || '操作失败'
+  if (typeof e === 'string' && e) return e
+  if (e && typeof e === 'object') {
+    const m = (e as Record<string, unknown>).message
+    if (typeof m === 'string' && m) return m
+    // Tauri serializes AppError enums as `{ "Variant": "detail" }`; pull the
+    // first value so users see the actual reason instead of "[object Object]".
+    const first = Object.values(e as Record<string, unknown>)[0]
+    if (typeof first === 'string' && first) return first
+    if (first && typeof first === 'object') {
+      const fm = (first as Record<string, unknown>).message
+      if (typeof fm === 'string' && fm) return fm
+    }
+    try {
+      return JSON.stringify(e)
+    } catch {
+      /* ignore */
+    }
+  }
+  return '操作失败，请查看日志'
+}
+
+async function ensureDbReady(): Promise<boolean> {
+  for (let i = 0; i < 20; i++) {
+    try {
+      await invoke<number>('database_schema_version')
+      return true
+    } catch {
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  }
+  return false
+}
+
 const DRIVERS = [{ label: '百度网盘', value: 'baidu_netdisk' }] as const
 
 const message = useMessage()
@@ -69,7 +104,7 @@ const form = ref<{
   root_path: string
   remark: string
 }>({
-  mount_path: '/百度网盘',
+  mount_path: '',
   driver: 'baidu_netdisk',
   refresh_token: '',
   client_id: DEFAULT_CLIENT_ID,
@@ -84,7 +119,7 @@ const isBaidu = computed(() => form.value.driver === 'baidu_netdisk')
 function resetForm() {
   editingId.value = null
   form.value = {
-    mount_path: '/百度网盘',
+    mount_path: '',
     driver: 'baidu_netdisk',
     refresh_token: '',
     client_id: DEFAULT_CLIENT_ID,
@@ -172,7 +207,7 @@ async function save() {
     showDialog.value = false
     await load()
   } catch (e) {
-    message.error(((e as Record<string, unknown>).message as string) ?? String(e))
+    message.error(errMsg(e))
   } finally {
     saving.value = false
   }
@@ -183,7 +218,7 @@ async function toggleDisabled(s: CloudStorage) {
     await invoke('cloud_storage_toggle', { id: s.id, disabled: !s.disabled })
     await load()
   } catch (e) {
-    message.error(((e as Record<string, unknown>).message as string) ?? String(e))
+    message.error(errMsg(e))
   }
 }
 
@@ -193,7 +228,7 @@ async function remove(s: CloudStorage) {
     message.success('存储已删除')
     await load()
   } catch (e) {
-    message.error(((e as Record<string, unknown>).message as string) ?? String(e))
+    message.error(errMsg(e))
   }
 }
 
@@ -209,13 +244,16 @@ async function load() {
   try {
     storages.value = await invoke<CloudStorage[]>('cloud_storage_list')
   } catch (e) {
-    message.error(((e as Record<string, unknown>).message as string) ?? String(e))
+    message.error(errMsg(e))
   } finally {
     loading.value = false
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  if (await ensureDbReady()) await load()
+  else message.error('数据库尚未就绪，请稍后刷新重试')
+})
 </script>
 
 <template>
@@ -313,7 +351,7 @@ onMounted(load)
     >
       <NForm label-placement="top">
         <NFormItem label="挂载路径">
-          <NInput v-model:value="form.mount_path" placeholder="/百度网盘" />
+          <NInput v-model:value="form.mount_path" placeholder="必填，如：百度网盘" />
         </NFormItem>
         <NFormItem label="驱动">
           <NSelect v-model:value="form.driver" :options="[...DRIVERS]" @update:value="onDriverChange" />

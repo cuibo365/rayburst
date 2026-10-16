@@ -23,6 +23,11 @@ pub struct CloudDriveFile {
     /// Baidu file category (1 video, 2 audio, 3 image, 4 doc, 5 app, 6 other, 7 torrent).
     #[serde(default)]
     pub category: u32,
+    /// Relative dir chain rooted at the checked (level-1) item, e.g. `A/B` for
+    /// a file inside checked folder `A/B`. Empty for level-1 files (flat
+    /// download into the default dir). Populated by `expand_folders`.
+    #[serde(default)]
+    pub rel_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,23 +37,16 @@ pub struct CloudDriveResult {
     pub failed: usize,
 }
 
-/// Compute the aria2 `dir` for a drive file:
-///   default download dir + (file path minus the current browser folder path)
-/// Returns `None` when there is no default dir, no current dir, or the file
-/// path does not live under the current folder (fall back to engine default).
-pub(crate) fn resolve_download_dir(
-    default_dir: &str,
-    current_dir: Option<&str>,
-    file_path: &str,
-) -> Option<String> {
+/// Compute the aria2 `dir` for a drive file from its `rel_path` chain
+/// (level-1 checked item as root):
+///   default download dir + rel_path
+/// An empty rel_path (level-1 file) resolves to the default dir itself.
+pub(crate) fn resolve_download_dir(default_dir: &str, rel_path: &str) -> Option<String> {
     let base = default_dir.trim();
     if base.is_empty() {
         return None;
     }
-    let cur = current_dir.map(str::trim).filter(|s| !s.is_empty())?;
-    let fp = file_path.trim_start_matches('/');
-    let rest = fp.strip_prefix(cur.trim_end_matches('/').trim_start_matches('/'))?;
-    let rel = rest.trim_start_matches('/');
+    let rel = rel_path.trim_matches('/');
     let joined = if rel.is_empty() {
         base.to_string()
     } else {

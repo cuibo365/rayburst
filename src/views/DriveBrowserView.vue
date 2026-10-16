@@ -107,6 +107,15 @@ function errMsg(e: unknown): string {
   if (e && typeof e === 'object') {
     const m = (e as Record<string, unknown>).message
     if (typeof m === 'string' && m) return m
+    // Tauri serializes AppError enums as `{ "Variant": "detail" }` (or nested
+    // struct variants), so fall back to the first field when there is no
+    // `message` key.
+    const first = Object.values(e as Record<string, unknown>)[0]
+    if (typeof first === 'string' && first) return first
+    if (first && typeof first === 'object') {
+      const fm = (first as Record<string, unknown>).message
+      if (typeof fm === 'string' && fm) return fm
+    }
     try {
       return JSON.stringify(e)
     } catch {
@@ -114,6 +123,19 @@ function errMsg(e: unknown): string {
     }
   }
   return '操作失败，请查看日志'
+}
+
+// --- db readiness (cold-start race guard) ---
+async function ensureDbReady(): Promise<boolean> {
+  for (let i = 0; i < 20; i++) {
+    try {
+      await invoke<number>('database_schema_version')
+      return true
+    } catch {
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  }
+  return false
 }
 
 // --- root level: all storages ---
@@ -229,7 +251,12 @@ async function startDownload() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  const ready = await ensureDbReady()
+  if (!ready) {
+    loadError.value = '数据库尚未就绪，请稍后刷新重试'
+    return
+  }
   void loadStorages()
 })
 </script>

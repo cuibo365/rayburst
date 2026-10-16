@@ -40,14 +40,8 @@ fn row_to_storage(row: &rusqlite::Row<'_>) -> rusqlite::Result<CloudStorage> {
 const COLUMNS: &str = "id,mount_path,driver,addition,status,disabled,remark,sort_order,created_at,modified";
 
 fn valid_mount_path(path: &str) -> Result<(), AppError> {
-    let trimmed = path.trim();
-    if !trimmed.starts_with('/') || trimmed == "/" || trimmed.contains("//") {
-        return Err(AppError::Database(format!(
-            "挂载路径需为 /名称 形式（如 /百度网盘），收到：{trimmed:?}"
-        )));
-    }
-    if trimmed.contains(char::is_whitespace) {
-        return Err(AppError::Database("挂载路径不能包含空格".into()));
+    if path.trim().is_empty() {
+        return Err(AppError::Database("挂载路径不能为空".into()));
     }
     Ok(())
 }
@@ -86,10 +80,26 @@ impl Database {
         addition: &str,
         remark: &str,
     ) -> Result<CloudStorage, AppError> {
-        let mount_path = mount_path.trim();
+        // Store the mount path exactly as provided (frontend trims/validates).
         valid_mount_path(mount_path)?;
         if driver.trim().is_empty() {
             return Err(AppError::Database("驱动不能为空".into()));
+        }
+        // Friendly duplicate check (DB UNIQUE constraint stays as backstop).
+        if self
+            .connection()
+            .await?
+            .query_row(
+                "SELECT 1 FROM cloud_storages WHERE mount_path=?1",
+                [mount_path],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            return Err(AppError::Database(format!(
+                "挂载路径已存在：{mount_path}"
+            )));
         }
         // Validate that addition is a JSON object before persisting.
         let addition = addition.trim();
@@ -128,8 +138,23 @@ impl Database {
         };
         let new_path = match mount_path {
             Some(p) => {
-                let p = p.trim();
+                // Store exactly as provided (frontend trims/validates).
                 valid_mount_path(p)?;
+                // Duplicate check excluding this row (DB UNIQUE is the backstop).
+                if p != current.mount_path
+                    && self
+                        .connection()
+                        .await?
+                        .query_row(
+                            "SELECT 1 FROM cloud_storages WHERE mount_path=?1 AND id<>?2",
+                            params![p, id],
+                            |_| Ok(()),
+                        )
+                        .optional()?
+                        .is_some()
+                {
+                    return Err(AppError::Database(format!("挂载路径已存在：{p}")));
+                }
                 p.to_string()
             }
             None => current.mount_path.clone(),
