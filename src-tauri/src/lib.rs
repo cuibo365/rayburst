@@ -790,6 +790,8 @@ pub fn run() {
             commands::cloud_drive_share_download,
             commands::cloud_drive_quark_qrcode_create,
             commands::cloud_drive_quark_qrcode_status,
+            commands::cloud_drive_115_qrcode_create,
+            commands::cloud_drive_115_qrcode_status,
         ])
         // ── Window event interception ─────────────────────────────────
         //

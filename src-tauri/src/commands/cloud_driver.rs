@@ -32,6 +32,18 @@ const QUARK_PUUS_COOKIE: &str = "__puus";
 /// Max attempts per API call (1 original + 1 after a session-cookie refresh).
 const QUARK_MAX_ATTEMPTS: usize = 2;
 
+/// 115 Netdisk drive (mirrors alist `drivers/115` + SheltonZhu/115driver).
+const M115_FILE_LIST_URL: &str = "https://webapi.115.com/files";
+const M115_DOWN_URL: &str = "https://proapi.115.com/app/chrome/downurl";
+const M115_UA: &str = "Mozilla/5.0 115Browser/27.0.5.7";
+const M115_REFERER: &str = "https://115.com/";
+/// Default list page size (alist default 1000; server caps at MaxDirPageLimit).
+const M115_PAGE_SIZE: i64 = 1000;
+/// 115 QR login endpoints (SDK qrcode.go).
+const M115_QRCODE_TOKEN_URL: &str = "https://qrcodeapi.115.com/api/1.0/web/1.0/token";
+const M115_QRCODE_STATUS_URL: &str = "https://qrcodeapi.115.com/get/status/";
+const M115_QRCODE_LOGIN_URL: &str = "https://passportapi.115.com/app/1.0/web/1.0/login/qrcode";
+
 /// Baidu Netdisk driver addition (persisted in `cloud_storages.addition`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaiduAddition {
@@ -105,6 +117,33 @@ impl QuarkAddition {
     }
 }
 
+/// 115 Netdisk driver addition (persisted in `cloud_storages.addition`).
+/// Auth is the web-session cookie copied from 115.com (UID/CID/SEID[/KID]),
+/// matching alist's 115 driver. The cookie is stable for a long time; the
+/// QR-code flow just fills it in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct M115Addition {
+    pub cookie: String,
+    /// Browse root category id; `0` is the drive root.
+    #[serde(default = "default_m115_root")]
+    pub root_id: String,
+}
+
+fn default_m115_root() -> String {
+    "0".into()
+}
+
+impl M115Addition {
+    pub fn parse(json: &str) -> Result<Self, AppError> {
+        serde_json::from_str(json)
+            .map_err(|e| AppError::CloudDrive(format!("解析驱动配置失败: {e}")))
+    }
+    fn to_json(&self) -> Result<String, AppError> {
+        serde_json::to_string(self)
+            .map_err(|e| AppError::CloudDrive(format!("序列化驱动配置失败: {e}")))
+    }
+}
+
 /// Best-effort HTML unescape for names returned by Quark.
 fn html_unescape(s: &str) -> String {
     s.replace("&amp;", "&")
@@ -120,6 +159,7 @@ pub enum CloudDriver {
     Baidu(BaiduDriver),
     Quark(QuarkDriver),
     QuarkShare(QuarkShareDriver),
+    M115(M115Driver),
 }
 
 impl CloudDriver {
@@ -137,6 +177,10 @@ impl CloudDriver {
                 id: storage.id,
                 addition: QuarkShareAddition::parse(&storage.addition)?,
             })),
+            "m115" => Ok(CloudDriver::M115(M115Driver {
+                id: storage.id,
+                addition: M115Addition::parse(&storage.addition)?,
+            })),
             other => Err(AppError::CloudDrive(format!(
                 "不支持的驱动类型：{other}"
             ))),
@@ -148,12 +192,13 @@ impl CloudDriver {
             CloudDriver::Baidu(_) => "baidu_netdisk",
             CloudDriver::Quark(_) => "quark",
             CloudDriver::QuarkShare(_) => "quark_share",
+            CloudDriver::M115(_) => "m115",
         }
     }
 
     /// List the children of `path`. For Baidu this is an absolute drive path
-    /// (including the mount root); for Quark/QuarkShare it is a directory fid
-    /// (`0` = root).
+    /// (including the mount root); for Quark/QuarkShare/M115 it is a directory
+    /// id (`0` = root).
     pub async fn list(
         &mut self,
         db: &Database,
@@ -166,6 +211,7 @@ impl CloudDriver {
             }
             CloudDriver::Quark(d) => d.list(db, path).await,
             CloudDriver::QuarkShare(d) => d.list(Some(db), path).await,
+            CloudDriver::M115(d) => d.list(db, path).await,
         };
         let status = match &result {
             Ok(_) => "正常".to_string(),
@@ -180,6 +226,9 @@ impl CloudDriver {
             }
             CloudDriver::QuarkShare(d) => {
                 d.set_status(Some(db), &status).await;
+            }
+            CloudDriver::M115(d) => {
+                d.set_status(db, &status).await;
             }
         }
         result
@@ -346,6 +395,7 @@ impl BaiduDriver {
                     rel_path: String::new(),
                     pdir_fid: String::new(),
                     share_fid_token: String::new(),
+                    pickcode: String::new(),
                 });
             }
             if out.len() < (page + 1) * LIMIT {
@@ -609,6 +659,7 @@ impl QuarkDriver {
                         rel_path: String::new(),
                         pdir_fid: String::new(),
                         share_fid_token: String::new(),
+                        pickcode: String::new(),
                     });
                 }
                 if out.is_empty() && skipped > 0 {
@@ -698,6 +749,246 @@ impl QuarkDriver {
         }
         if result.is_empty() {
             return Err(AppError::CloudDrive("未能获取任何夸克文件的下载地址".into()));
+        }
+        Ok(result)
+    }
+}
+
+// ============================== 115 driver ==============================
+
+/// 115 Netdisk driver: cookie-auth list + m115-encrypted download URLs.
+/// The CDN URL is bound to the account cookie and the 115Browser UA, so both
+/// must ride along in the aria2 headers (mirrors alist's Link() cookie fix).
+pub struct M115Driver {
+    id: i64,
+    addition: M115Addition,
+}
+
+impl M115Driver {
+    fn http_client() -> Result<reqwest::Client, AppError> {
+        reqwest::Client::builder()
+            .user_agent(M115_UA)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
+    }
+
+    async fn set_status(&self, db: &Database, status: &str) -> Result<(), AppError> {
+        db.set_storage_status(self.id, status).await
+    }
+
+    /// Normalize the browse root: empty → `0`.
+    fn root(&self) -> String {
+        let root = self.addition.root_id.trim();
+        if root.is_empty() {
+            "0".into()
+        } else {
+            root.to_string()
+        }
+    }
+
+    /// Parse 115's update-time field: dirs send unix seconds, files send a
+    /// `2006-01-02 15:04[:SS]` string in Beijing time.
+    fn parse_mtime(t: &str) -> u64 {
+        if let Ok(secs) = t.parse::<i64>() {
+            return secs.max(0) as u64;
+        }
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(t, fmt) {
+                if let Some(offset) = chrono::FixedOffset::east_opt(8 * 3600) {
+                    if let Ok(dt) = dt.and_local_timezone(offset).single() {
+                        return dt.timestamp().max(0) as u64;
+                    }
+                }
+            }
+        }
+        0
+    }
+
+    async fn list(
+        &mut self,
+        _db: &Database,
+        cid: &str,
+    ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
+        let dir = if cid.is_empty() { self.root() } else { cid.to_string() };
+        const MAX_PAGES: usize = 100; // 安全上限，防异常死循环
+        let mut out = Vec::new();
+        let mut offset: i64 = 0;
+        for _ in 0..MAX_PAGES {
+            let client = Self::http_client()?;
+            let offset_s = offset.to_string();
+            let limit_s = M115_PAGE_SIZE.to_string();
+            let url = reqwest::Url::parse_with_params(
+                M115_FILE_LIST_URL,
+                &[
+                    ("aid", "1"),
+                    ("cid", dir.as_str()),
+                    ("o", "time"),
+                    ("asc", "1"),
+                    ("offset", offset_s.as_str()),
+                    ("show_dir", "1"),
+                    ("limit", limit_s.as_str()),
+                    ("snap", "0"),
+                    ("natsort", "0"),
+                    ("record_open_time", "1"),
+                    ("format", "json"),
+                    ("fc_mix", "0"),
+                ],
+            )
+            .map_err(|e| AppError::CloudDrive(format!("构造 115 列表地址失败: {e}")))?;
+            let resp = client
+                .get(url)
+                .header("Cookie", &self.addition.cookie)
+                .header("Referer", M115_REFERER)
+                .header("Content-Type", "application/json;charset=UTF-8")
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求 115 文件列表失败: {e}")))?;
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("读取 115 列表响应失败: {e}")))?;
+            let json: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| AppError::CloudDrive(format!("解析 115 列表失败: {e}")))?;
+            let state = json["state"].as_bool().unwrap_or(false);
+            if !status.is_success() || !state {
+                let msg = json["error"]
+                    .as_str()
+                    .or_else(|| json["message"].as_str())
+                    .unwrap_or("未知错误");
+                if status == reqwest::StatusCode::FORBIDDEN
+                    || status == reqwest::StatusCode::UNAUTHORIZED
+                {
+                    return Err(AppError::CloudDrive(format!(
+                        "115 登录状态已失效（HTTP {status}），请重新获取 cookie：{msg}"
+                    )));
+                }
+                return Err(AppError::CloudDrive(format!(
+                    "115 返回错误（HTTP {status}）：{msg}"
+                )));
+            }
+            let list = json["data"].as_array().cloned().unwrap_or_default();
+            for item in &list {
+                // Directories carry no `fid`; their id is `cid`. Files carry
+                // fid + pickcode (needed for download).
+                let fid = item["fid"].as_str().unwrap_or("");
+                let name = item["n"].as_str().unwrap_or("").to_string();
+                if fid.is_empty() {
+                    // directory: `cid` may be a JSON string or a number
+                    let cid_val = item["cid"]
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| item["cid"].as_u64().map(|n| n.to_string()))
+                        .or_else(|| item["cid"].as_i64().map(|n| n.to_string()))
+                        .unwrap_or_default();
+                    out.push(crate::commands::CloudDriveFile {
+                        fs_id: 0,
+                        name,
+                        size: 0,
+                        path: cid_val.clone(),
+                        isdir: true,
+                        mtime: Self::parse_mtime(item["t"].as_str().unwrap_or("")),
+                        category: 0,
+                        id: cid_val,
+                        rel_path: String::new(),
+                        pdir_fid: String::new(),
+                        share_fid_token: String::new(),
+                        pickcode: String::new(),
+                    });
+                } else {
+                    let size = item["s"]
+                        .as_str()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .or_else(|| item["s"].as_u64())
+                        .unwrap_or(0);
+                    out.push(crate::commands::CloudDriveFile {
+                        fs_id: 0,
+                        name,
+                        size,
+                        path: fid.to_string(),
+                        isdir: false,
+                        mtime: Self::parse_mtime(item["t"].as_str().unwrap_or("")),
+                        category: 0,
+                        id: fid.to_string(),
+                        rel_path: String::new(),
+                        pdir_fid: String::new(),
+                        share_fid_token: String::new(),
+                        pickcode: item["pc"].as_str().unwrap_or("").to_string(),
+                    });
+                }
+            }
+            let count = json["count"].as_i64().unwrap_or(0);
+            offset += M115_PAGE_SIZE;
+            if offset >= count {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Fetch download URLs: m115-encrypt each pickcode, POST downurl, decrypt
+    /// the response. The CDN URL requires the account cookie + 115Browser UA.
+    pub async fn get_dlinks(
+        &mut self,
+        _db: &Database,
+        files: &[crate::commands::CloudDriveFile],
+    ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
+        let mut result = Vec::new();
+        for file in files {
+            if file.isdir || file.pickcode.is_empty() {
+                continue;
+            }
+            let client = Self::http_client()?;
+            let key = crate::commands::m115_crypto::generate_key();
+            let body = serde_json::json!({ "pickcode": file.pickcode }).to_string();
+            let data = crate::commands::m115_crypto::encode(body.as_bytes(), &key);
+            let url = format!("{M115_DOWN_URL}?t={}", chrono::Utc::now().timestamp_millis());
+            let resp = client
+                .post(&url)
+                .header("Cookie", &self.addition.cookie)
+                .header("Referer", M115_REFERER)
+                .form(&[("data", data.as_str())])
+                .header("Content-Type", "application/json;charset=UTF-8")
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求 115 下载地址失败: {e}")))?;
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("读取 115 下载响应失败: {e}")))?;
+            let json: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| AppError::CloudDrive(format!("解析 115 下载响应失败: {e}")))?;
+            let state = json["state"].as_bool().unwrap_or(false);
+            if !status.is_success() || !state {
+                return Err(AppError::CloudDrive(format!(
+                    "获取 115 下载地址失败（HTTP {status}）：{}",
+                    json["error"].as_str().unwrap_or("未知错误")
+                )));
+            }
+            let encoded = json["data"]
+                .as_str()
+                .ok_or_else(|| AppError::CloudDrive("115 下载响应缺少 data".into()))?;
+            let plain = crate::commands::m115_crypto::decode(encoded, &key)
+                .map_err(|e| AppError::CloudDrive(format!("解密 115 下载响应失败: {e}")))?;
+            let plain_json: serde_json::Value = serde_json::from_slice(&plain)
+                .map_err(|e| AppError::CloudDrive(format!("解析 115 下载数据失败: {e}")))?;
+            let dlink = plain_json[file.pickcode.as_str()]["url"]["url"]
+                .as_str()
+                .ok_or_else(|| {
+                    AppError::CloudDrive(format!("115 未返回 {} 的下载地址", file.name))
+                })?
+                .to_string();
+            let headers = vec![
+                format!("User-Agent: {M115_UA}"),
+                format!("Referer: {M115_REFERER}"),
+                format!("Cookie: {}", self.addition.cookie),
+            ];
+            result.push((file.clone(), dlink, headers));
+        }
+        if result.is_empty() {
+            return Err(AppError::CloudDrive("未能获取任何 115 文件的下载地址".into()));
         }
         Ok(result)
     }
@@ -932,6 +1223,7 @@ impl QuarkShareDriver {
                         rel_path: String::new(),
                         pdir_fid: fid.to_string(),
                         share_fid_token: item["share_fid_token"].as_str().unwrap_or("").to_string(),
+                        pickcode: String::new(),
                     });
                 }
                 let total = json["metadata"]["_total"].as_u64().unwrap_or(0);
@@ -1193,6 +1485,7 @@ pub async fn cloud_drive_storage_download(
         CloudDriver::Baidu(d) => d.get_dlinks(&db.0, &files).await?,
         CloudDriver::Quark(d) => d.get_dlinks(&db.0, &files).await?,
         CloudDriver::QuarkShare(d) => d.get_dlinks(Some(&db.0), &files).await?,
+        CloudDriver::M115(d) => d.get_dlinks(&db.0, &files).await?,
     };
 
     let default_dir: Option<String> = app
@@ -1504,6 +1797,174 @@ pub async fn cloud_drive_quark_qrcode_status(
             state: "error".into(),
             cookie: None,
             message: Some(format!("夸克返回未知状态: {other}")),
+        }),
+    }
+}
+
+// ============================== 115 qrcode login (扫码获取 Cookie) ==============================
+//
+// Mirrors 115driver's qrcode.go: create a session, render the QR code,
+// poll until the 115 app scans it, then trade `account=uid` for the
+// UID/CID/SEID/KID credential cookie.
+
+/// Generated 115 QR login session handed to the frontend for display/polling.
+#[derive(serde::Serialize)]
+pub struct M115QrcodeCreated {
+    pub qrcode_svg: String,
+    pub uid: String,
+    pub time: i64,
+    pub sign: String,
+}
+
+/// Poll result. `state`: success / pending / scanned / expired / canceled / error.
+#[derive(serde::Serialize)]
+pub struct M115QrcodeStatus {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cookie: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Step 1: create a 115 QR login session and render the QR code as SVG.
+#[tauri::command]
+pub async fn cloud_drive_115_qrcode_create() -> Result<M115QrcodeCreated, AppError> {
+    let client = reqwest::Client::builder()
+        .user_agent(M115_UA)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
+    let resp = client
+        .get(M115_QRCODE_TOKEN_URL)
+        .header("Referer", M115_REFERER)
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("请求 115 登录二维码失败: {e}")))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("解析 115 登录二维码响应失败: {e}")))?;
+    let data = &json["data"];
+    let qr_content = data["qrcode"]
+        .as_str()
+        .ok_or_else(|| AppError::CloudDrive("115 登录二维码响应缺少 qrcode".into()))?;
+    let uid = data["uid"]
+        .as_str()
+        .ok_or_else(|| AppError::CloudDrive("115 登录二维码响应缺少 uid".into()))?
+        .to_string();
+    let time = data["time"].as_i64().unwrap_or(0);
+    let sign = data["sign"]
+        .as_str()
+        .ok_or_else(|| AppError::CloudDrive("115 登录二维码响应缺少 sign".into()))?
+        .to_string();
+    let code = qrcode::QrCode::new(qr_content.as_bytes())
+        .map_err(|e| AppError::CloudDrive(format!("生成二维码失败: {e}")))?;
+    let qrcode_svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(320, 320)
+        .build();
+    Ok(M115QrcodeCreated {
+        qrcode_svg,
+        uid,
+        time,
+        sign,
+    })
+}
+
+/// Step 2: poll the scan status; on success returns the merged cookie string
+/// (`UID=..;CID=..;SEID=..;KID=..`) from the login endpoint.
+#[tauri::command]
+pub async fn cloud_drive_115_qrcode_status(
+    uid: String,
+    time: i64,
+    sign: String,
+) -> Result<M115QrcodeStatus, AppError> {
+    let client = reqwest::Client::builder()
+        .user_agent(M115_UA)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
+    let url = format!(
+        "{M115_QRCODE_STATUS_URL}?uid={}&time={}&sign={}&_={}",
+        urlencoding::encode(&uid),
+        time,
+        urlencoding::encode(&sign),
+        chrono::Utc::now().timestamp_millis()
+    );
+    let resp = client
+        .get(&url)
+        .header("Referer", M115_REFERER)
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("查询 115 登录状态失败: {e}")))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("解析 115 登录状态失败: {e}")))?;
+    let status = json["data"]["status"].as_i64().unwrap_or(-1);
+    match status {
+        2 => {
+            // 已确认：用 account=uid 换取登录凭据
+            let login_resp = client
+                .post(M115_QRCODE_LOGIN_URL)
+                .header("Referer", M115_REFERER)
+                .form(&[("account", uid.as_str()), ("app", "web")])
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("换取 115 登录凭据失败: {e}")))?;
+            let login_json: serde_json::Value = login_resp
+                .json()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("解析 115 登录凭据失败: {e}")))?;
+            let cr = &login_json["data"]["cookie"];
+            let cred_uid = cr["UID"].as_str().unwrap_or("");
+            let cred_cid = cr["CID"].as_str().unwrap_or("");
+            let cred_seid = cr["SEID"].as_str().unwrap_or("");
+            let cred_kid = cr["KID"].as_str().unwrap_or("");
+            if cred_uid.is_empty() || cred_cid.is_empty() || cred_seid.is_empty() {
+                return Ok(M115QrcodeStatus {
+                    state: "error".into(),
+                    cookie: None,
+                    message: Some(format!(
+                        "115 登录凭据不完整（UID/CID/SEID 缺失）：{}",
+                        login_json["error"].as_str().unwrap_or("")
+                    )),
+                });
+            }
+            let mut cookie = format!("UID={cred_uid};CID={cred_cid};SEID={cred_seid}");
+            if !cred_kid.is_empty() {
+                cookie.push_str(&format!(";KID={cred_kid}"));
+            }
+            Ok(M115QrcodeStatus {
+                state: "success".into(),
+                cookie: Some(cookie),
+                message: None,
+            })
+        }
+        1 => Ok(M115QrcodeStatus {
+            state: "scanned".into(),
+            cookie: None,
+            message: Some("已扫码，请在手机上确认登录".into()),
+        }),
+        0 => Ok(M115QrcodeStatus {
+            state: "pending".into(),
+            cookie: None,
+            message: None,
+        }),
+        -1 => Ok(M115QrcodeStatus {
+            state: "expired".into(),
+            cookie: None,
+            message: Some("二维码已过期，请刷新后重试".into()),
+        }),
+        -2 => Ok(M115QrcodeStatus {
+            state: "canceled".into(),
+            cookie: None,
+            message: Some("已取消登录".into()),
+        }),
+        other => Ok(M115QrcodeStatus {
+            state: "error".into(),
+            cookie: None,
+            message: Some(format!("115 返回未知状态: {other}")),
         }),
     }
 }

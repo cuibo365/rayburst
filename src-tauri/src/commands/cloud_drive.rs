@@ -40,6 +40,10 @@ pub struct CloudDriveFile {
     /// in the share download request. Empty for non-share drivers.
     #[serde(default)]
     pub share_fid_token: String,
+    /// 115 driver: the pickcode used to request download URLs. Empty for
+    /// Baidu/Quark (which resolve dlinks by fs_id / fid).
+    #[serde(default)]
+    pub pickcode: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -52,6 +52,9 @@ igd-next = { version = "0.15", features = ["aio_tokio"] }
 ipnet = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies"] }
 qrcode = "0.14"
+num-bigint = "0.4"
+rand = "0.8"
+base64 = "0.22"
 tokio-tungstenite = "0.28"
 futures-util = "0.3"
 tauri-plugin-log = "2.8.0"

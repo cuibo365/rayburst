@@ -14,6 +14,7 @@ pub mod http_api;
 pub mod http_auth;
 mod http_client;
 pub mod logging;
+pub mod m115_crypto;
 pub mod notification;
 pub mod power;
 pub mod protocol;

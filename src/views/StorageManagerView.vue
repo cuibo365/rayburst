@@ -80,6 +80,7 @@ const DRIVERS = [
   { label: '百度网盘', value: 'baidu_netdisk' },
   { label: '夸克网盘', value: 'quark' },
   { label: '夸克分享', value: 'quark_share' },
+  { label: '115 网盘', value: 'm115' },
 ] as const
 
 const message = useMessage()
@@ -120,6 +121,7 @@ const dialogTitle = computed(() => (editingId.value === null ? '添加存储' : 
 const isBaidu = computed(() => form.value.driver === 'baidu_netdisk')
 const isQuark = computed(() => form.value.driver === 'quark')
 const isQuarkShare = computed(() => form.value.driver === 'quark_share')
+const isM115 = computed(() => form.value.driver === 'm115')
 
 function resetForm() {
   editingId.value = null
@@ -178,10 +180,14 @@ function onDriverChange() {
   form.value.passcode = ''
 }
 
-// --- quark qrcode login (扫码获取 Cookie) ---
+// --- qrcode login (扫码获取 Cookie): quark / 115 ---
 const qrDialog = ref(false)
+const qrKind = ref<'quark' | 'm115'>('quark')
 const qrSvg = ref('')
 const qrToken = ref('')
+const qrUid = ref('')
+const qrTime = ref(0)
+const qrSign = ref('')
 const qrError = ref('')
 const qrGenerating = ref(false)
 let qrTimer: number | null = null
@@ -198,29 +204,59 @@ async function genQrcode() {
   qrError.value = ''
   qrGenerating.value = true
   try {
-    const r = await invoke<{ token: string; qrcode_svg: string }>('cloud_drive_quark_qrcode_create')
-    qrToken.value = r.token
-    qrSvg.value = r.qrcode_svg
-    qrTimer = window.setInterval(async () => {
-      if (!qrToken.value) return
-      try {
-        const r = await invoke<{ state: string; cookie?: string; message?: string }>(
-          'cloud_drive_quark_qrcode_status',
-          { token: qrToken.value },
-        )
-        if (r.state === 'success' && r.cookie) {
-          form.value.cookie = r.cookie
-          stopQrPoll()
-          qrDialog.value = false
-          message.success('扫码成功，Cookie 已自动填入')
-        } else if (r.state === 'expired' || r.state === 'error') {
-          stopQrPoll()
-          qrError.value = r.message || '扫码失败，请刷新二维码重试'
+    if (qrKind.value === 'm115') {
+      const r = await invoke<{ qrcode_svg: string; uid: string; time: number; sign: string }>(
+        'cloud_drive_115_qrcode_create',
+      )
+      qrUid.value = r.uid
+      qrTime.value = r.time
+      qrSign.value = r.sign
+      qrSvg.value = r.qrcode_svg
+      qrTimer = window.setInterval(async () => {
+        if (!qrUid.value) return
+        try {
+          const r = await invoke<{ state: string; cookie?: string; message?: string }>(
+            'cloud_drive_115_qrcode_status',
+            { uid: qrUid.value, time: qrTime.value, sign: qrSign.value },
+          )
+          if (r.state === 'success' && r.cookie) {
+            form.value.cookie = r.cookie
+            stopQrPoll()
+            qrDialog.value = false
+            message.success('扫码成功，Cookie 已自动填入')
+          } else if (r.state === 'expired' || r.state === 'canceled' || r.state === 'error') {
+            stopQrPoll()
+            qrError.value = r.message || '扫码失败，请刷新二维码重试'
+          }
+        } catch {
+          // transient network error: keep polling
         }
-      } catch {
-        // transient network error: keep polling
-      }
-    }, 2000)
+      }, 2000)
+    } else {
+      const r = await invoke<{ token: string; qrcode_svg: string }>('cloud_drive_quark_qrcode_create')
+      qrToken.value = r.token
+      qrSvg.value = r.qrcode_svg
+      qrTimer = window.setInterval(async () => {
+        if (!qrToken.value) return
+        try {
+          const r = await invoke<{ state: string; cookie?: string; message?: string }>(
+            'cloud_drive_quark_qrcode_status',
+            { token: qrToken.value },
+          )
+          if (r.state === 'success' && r.cookie) {
+            form.value.cookie = r.cookie
+            stopQrPoll()
+            qrDialog.value = false
+            message.success('扫码成功，Cookie 已自动填入')
+          } else if (r.state === 'expired' || r.state === 'error') {
+            stopQrPoll()
+            qrError.value = r.message || '扫码失败，请刷新二维码重试'
+          }
+        } catch {
+          // transient network error: keep polling
+        }
+      }, 2000)
+    }
   } catch (err) {
     qrError.value = errMsg(err)
   } finally {
@@ -228,9 +264,13 @@ async function genQrcode() {
   }
 }
 
-function openQrcode() {
+function openQrcode(kind: 'quark' | 'm115' = 'quark') {
+  qrKind.value = kind
   qrSvg.value = ''
   qrToken.value = ''
+  qrUid.value = ''
+  qrTime.value = 0
+  qrSign.value = ''
   qrError.value = ''
   qrDialog.value = true
   void genQrcode()
@@ -260,6 +300,12 @@ function buildAddition(): Record<string, unknown> {
       share_url: form.value.share_url.trim(),
       cookie: form.value.cookie.trim(),
       passcode: form.value.passcode.trim(),
+    }
+  }
+  if (form.value.driver === 'm115') {
+    return {
+      cookie: form.value.cookie.trim(),
+      root_id: form.value.root_id.trim() || '0',
     }
   }
   return {
@@ -292,6 +338,10 @@ async function save() {
       message.warning('请填写夸克网页版 Cookie（下载分享文件需要登录态）')
       return
     }
+  }
+  if (form.value.driver === 'm115' && !form.value.cookie.trim()) {
+    message.warning('请填写 115 网页版 Cookie（登录 115.com 后从浏览器复制）')
+    return
   }
   saving.value = true
   try {
@@ -410,7 +460,9 @@ onMounted(async () => {
                       ? '夸克网盘'
                       : s.driver === 'quark_share'
                         ? '夸克分享'
-                        : s.driver
+                        : s.driver === 'm115'
+                          ? '115 网盘'
+                          : s.driver
                 }}
               </td>
               <td>
@@ -507,7 +559,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="small" type="primary" @click="openQrcode">扫码获取</NButton>
+                <NButton size="small" type="primary" @click="openQrcode('quark')">扫码获取</NButton>
               </div>
             </template>
             <NInput
@@ -537,7 +589,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="small" type="primary" @click="openQrcode">扫码获取</NButton>
+                <NButton size="small" type="primary" @click="openQrcode('quark')">扫码获取</NButton>
               </div>
             </template>
             <NInput
@@ -553,6 +605,30 @@ onMounted(async () => {
           </p>
         </template>
 
+        <template v-else-if="isM115">
+          <NFormItem label="Cookie">
+            <template #label>
+              <div class="storage-cookie-label">
+                <span>Cookie</span>
+                <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
+              </div>
+            </template>
+            <NInput
+              v-model:value="form.cookie"
+              type="textarea"
+              :autosize="{ minRows: 4, maxRows: 8 }"
+              placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
+            />
+          </NFormItem>
+          <p class="storage-quark-tip">
+            浏览器登录 <code>115.com</code> → F12 → Application → Cookies 全选复制（形如
+            <code>UID=xxx; CID=yyy; SEID=zzz</code>）；或点右上角「扫码获取」用 115 App 自动获取。
+          </p>
+          <NFormItem label="root_id（挂载根目录 cid）">
+            <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
+          </NFormItem>
+        </template>
+
         <NFormItem label="备注">
           <NInput v-model:value="form.remark" placeholder="可选" />
         </NFormItem>
@@ -565,21 +641,31 @@ onMounted(async () => {
       </template>
     </NModal>
 
-    <!-- 夸克扫码获取 Cookie -->
+    <!-- 扫码获取 Cookie（夸克 / 115） -->
     <NModal
       v-model:show="qrDialog"
       preset="card"
-      title="夸克扫码获取 Cookie"
+      :title="qrKind === 'm115' ? '115 扫码获取 Cookie' : '夸克扫码获取 Cookie'"
       class="storage-dialog"
       :style="{ width: '360px' }"
       :bordered="false"
       @after-leave="stopQrPoll"
     >
       <p class="storage-quark-tip">
-        请使用<strong>夸克 App</strong> 扫码登录（手机端需已登录账号），扫码成功后将自动填入 Cookie。
+        <template v-if="qrKind === 'm115'">
+          请使用<strong>115 App</strong> 扫码登录（手机端需已登录账号），扫码后请在手机上确认登录，成功后自动填入
+          Cookie。
+        </template>
+        <template v-else>
+          请使用<strong>夸克 App</strong> 扫码登录（手机端需已登录账号），扫码成功后将自动填入 Cookie。
+        </template>
       </p>
       <div class="qr-box">
-        <img v-if="qrSvg" :src="'data:image/svg+xml;utf8,' + encodeURIComponent(qrSvg)" alt="夸克登录二维码" />
+        <img
+          v-if="qrSvg"
+          :src="'data:image/svg+xml;utf8,' + encodeURIComponent(qrSvg)"
+          :alt="qrKind === 'm115' ? '115 登录二维码' : '夸克登录二维码'"
+        />
         <NSpin v-else :show="qrGenerating" class="qr-loading" />
       </div>
       <div v-if="qrError" class="qr-error">{{ qrError }}</div>
