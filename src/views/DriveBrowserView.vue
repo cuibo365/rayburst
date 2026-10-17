@@ -599,6 +599,7 @@ onMounted(async () => {
 <style scoped>
 .drive-explorer {
   flex: 1;
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -680,6 +681,7 @@ onMounted(async () => {
 .drive-table td {
   padding: 7px 12px;
   border-bottom: 1px solid rgba(128, 128, 128, 0.1);
+  overflow: hidden;
 }
 .drive-row {
   cursor: pointer;
