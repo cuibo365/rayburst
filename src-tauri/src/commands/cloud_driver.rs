@@ -1490,14 +1490,15 @@ async fn submit_links(
     let mut added = 0usize;
     let mut failed = 0usize;
     for (file, dlink, headers) in links {
-        // HTTP direct links from drive CDNs cap a single connection low
-        // (115 ~5MB/s), so enable aria2 multi-connection slicing per task:
-        // split=16 pieces, up to 16 connections per server, >=1M each.
+        // Drive CDN direct links cap a single connection low (115 ~5MB/s vs
+        // ~20MB/s in a browser). aria2's real concurrency is
+        // min(split, max-connection-per-server), so raise split here and let
+        // max-connection-per-server inherit the engine/global preference
+        // (do not pin it per-task, which would override the user's setting).
         let mut options = serde_json::json!({
             "header": headers,
             "out": file.name,
-            "split": 16,
-            "max-connection-per-server": 16,
+            "split": 32,
             "min-split-size": "1M",
         });
         if let Some(dir) = default_dir
