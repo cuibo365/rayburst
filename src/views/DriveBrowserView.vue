@@ -54,6 +54,10 @@ const rootPath = ref('/')
 const browseStack = ref<{ name: string; key: string }[]>([])
 const crumbSegs = computed(() => browseStack.value.map((x) => x.name))
 const files = ref<DriveFile[]>([])
+/** Rendered rows are paginated client-side to keep long listings smooth. */
+const PAGE_SIZE = 200
+const visibleCount = ref(PAGE_SIZE)
+const visibleFiles = computed(() => files.value.slice(0, visibleCount.value))
 const loading = ref(false)
 const loadError = ref('')
 const selected = ref<Set<string>>(new Set())
@@ -226,13 +230,26 @@ async function loadDir(fullPath: string) {
           path: fullPath,
         })
     files.value = list
+    visibleCount.value = PAGE_SIZE
     selected.value = new Set()
   } catch (err) {
     loadError.value = errMsg(err)
     files.value = []
+    visibleCount.value = PAGE_SIZE
     selected.value = new Set()
   } finally {
     loading.value = false
+  }
+}
+
+/** Load the next page of rows when the list scrolled near its bottom. */
+function onListScroll(e: Event) {
+  const el = e.target as HTMLElement
+  if (!el) return
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 300) {
+    if (visibleCount.value < files.value.length) {
+      visibleCount.value = Math.min(files.value.length, visibleCount.value + PAGE_SIZE)
+    }
   }
 }
 
@@ -242,6 +259,7 @@ function goHome() {
   shareSession.value = null
   browseStack.value = []
   files.value = []
+  visibleCount.value = PAGE_SIZE
   selected.value = new Set()
   void loadStorages()
 }
@@ -352,6 +370,7 @@ async function confirmShare() {
     browseStack.value = []
     rootPath.value = '0'
     files.value = []
+    visibleCount.value = PAGE_SIZE
     selected.value = new Set()
     loadError.value = ''
     await loadDir('0')
@@ -448,7 +467,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="drive-list">
+    <div class="drive-list" @scroll.passive="onListScroll">
       <NSpin :show="loading">
         <NEmpty
           v-if="!loading && isRoot && visibleStorages.length === 0"
@@ -508,7 +527,12 @@ onMounted(async () => {
             </tr>
           </tbody>
           <tbody v-else>
-            <tr v-for="f in files" :key="f.id" class="drive-row" :class="{ 'drive-row--sel': selected.has(f.id) }">
+            <tr
+              v-for="f in visibleFiles"
+              :key="f.id"
+              class="drive-row"
+              :class="{ 'drive-row--sel': selected.has(f.id) }"
+            >
               <td class="drive-col-check">
                 <NCheckbox :checked="selected.has(f.id)" @update:checked="toggle(f)" />
               </td>
@@ -702,7 +726,14 @@ onMounted(async () => {
   color: var(--m3-on-surface);
   font-size: 14px;
   width: 100%;
+  min-width: 0;
   text-align: left;
+}
+.drive-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .drive-name--dir .drive-name-text {
   font-weight: 600;
