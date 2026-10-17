@@ -670,8 +670,14 @@ onMounted(async () => {
   gap: 8px;
   width: 100%;
 }
-/* Let the #label slot stretch across the dialog so 扫码获取 sits flush right. */
+/* Let the #label slot stretch across the dialog so 扫码获取 sits flush right.
+   naive-ui wraps slot content in `.n-form-item-label__text` (inline), so it
+   must become a flex row too — otherwise width:100% can't stretch it. */
 .storage-dialog :deep(.n-form-item-label) {
+  width: 100%;
+}
+.storage-dialog :deep(.n-form-item-label__text) {
+  display: flex;
   width: 100%;
 }
 .qr-box {
