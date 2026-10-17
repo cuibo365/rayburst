@@ -212,6 +212,8 @@ impl M115ShareAddition {
     }
     /// Extract share_code / receive_code from the raw share URL. Accepts
     /// `https://115.com/s/<code>?password=<pwd>` and `https://115cdn.com/s/<code>?password=<pwd>&`.
+    /// The trailing `#fragment` (e.g. a markdown suffix) is stripped so it
+    /// never leaks into the receive code sent to the API.
     fn parse_share_url(url: &str) -> (String, String) {
         let (code, pwd) = match url.find("/s/") {
             Some(idx) => {
@@ -224,6 +226,9 @@ impl M115ShareAddition {
                 let pwd = url
                     .split('?')
                     .nth(1)
+                    .unwrap_or("")
+                    .split('#')
+                    .next()
                     .unwrap_or("")
                     .split('&')
                     .find_map(|kv| {
