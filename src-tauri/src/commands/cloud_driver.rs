@@ -1557,7 +1557,8 @@ async fn submit_links(
         // sequential downloads. Other drives inherit the global connection
         // setting.
         if dlink.contains("115cdn.net") || dlink.contains(".115.com") {
-            options["stream-max-range-size"] = serde_json::Value::String("1G".into());
+            // Max supported value is 1GB; only K/M suffixes are accepted.
+            options["stream-max-range-size"] = serde_json::Value::String("1024M".into());
             options["stream-max-connections"] = serde_json::Value::String("2".into());
         }
         if let Some(dir) = default_dir
