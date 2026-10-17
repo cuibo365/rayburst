@@ -1545,13 +1545,21 @@ async fn submit_links(
     let mut added = 0usize;
     let mut failed = 0usize;
     for (file, dlink, headers) in links {
-        // Keep per-task options minimal: aria2's default split (5) and the
-        // engine/global connection preference apply, as before. Drive CDNs
-        // (115 especially) reject or don't benefit from aggressive slicing.
         let mut options = serde_json::json!({
             "header": headers,
             "out": file.name,
         });
+        // 115 CDN throttles small byte-range requests (~10MB/s) and rejects
+        // concurrent small ranges (403). Large ranges (>=100MB) are NOT
+        // throttled (verified live: 10MB range ~11MB/s, 512MB range ~26MB/s,
+        // 4x10MB concurrent -> 2x403). So for 115 force big ranges and keep
+        // concurrency low so each range gets full speed, matching browser
+        // sequential downloads. Other drives inherit the global connection
+        // setting.
+        if dlink.contains("115cdn.net") || dlink.contains(".115.com") {
+            options["stream-max-range-size"] = serde_json::Value::String("1G".into());
+            options["stream-max-connections"] = serde_json::Value::String("2".into());
+        }
         if let Some(dir) = default_dir
             .and_then(|base| resolve_download_dir(base, &file.rel_path))
         {
