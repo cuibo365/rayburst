@@ -749,6 +749,19 @@ impl QuarkDriver {
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("请求夸克下载地址失败: {e}")))?;
                 let status = resp.status();
+                // The download URL is signed against the *fresh* session cookie
+                // issued by this response (verified live: old cookie -> 412,
+                // merged new __puus -> 206). Grab it before consuming the body.
+                let new_puus: Option<String> = resp
+                    .headers()
+                    .get_all(reqwest::header::SET_COOKIE)
+                    .filter_map(|v| v.to_str().ok())
+                    .find_map(|s| {
+                        s.split(';')
+                            .next()
+                            .and_then(|kv| kv.trim().strip_prefix(&format!("{QUARK_PUUS_COOKIE}=")))
+                            .map(str::to_string)
+                    });
                 let json: serde_json::Value = resp
                     .json()
                     .await
@@ -768,10 +781,23 @@ impl QuarkDriver {
                     )));
                 }
                 let data = json["data"].as_array().cloned().unwrap_or_default();
+                // Download headers carry the fresh session cookie; persist it
+                // back so later requests keep using an up-to-date session.
+                let mut dl_cookie = req_cookie;
+                if let Some(puus) = new_puus {
+                    let stripped = Self::strip_puus(&dl_cookie);
+                    dl_cookie = if stripped.is_empty() {
+                        format!("{QUARK_PUUS_COOKIE}={puus}")
+                    } else {
+                        format!("{stripped}; {QUARK_PUUS_COOKIE}={puus}")
+                    };
+                    self.addition.cookie = dl_cookie.clone();
+                    let _ = self.persist(db).await;
+                }
                 let headers = vec![
                     format!("User-Agent: {QUARK_UA}"),
                     format!("Referer: {QUARK_REFERER}"),
-                    format!("Cookie: {req_cookie}"),
+                    format!("Cookie: {dl_cookie}"),
                 ];
                 for (i, item) in data.iter().enumerate() {
                     let Some(url) = item["download_url"].as_str() else { continue };
@@ -1364,6 +1390,20 @@ impl QuarkShareDriver {
                         .await
                         .map_err(|e| AppError::CloudDrive(format!("请求夸克分享下载地址失败: {e}")))?;
                     let status = resp.status();
+                    // Same __puus rule as the own-drive download: the signed URL
+                    // requires the fresh session cookie from this response.
+                    let new_puus: Option<String> = resp
+                        .headers()
+                        .get_all(reqwest::header::SET_COOKIE)
+                        .filter_map(|v| v.to_str().ok())
+                        .find_map(|s| {
+                            s.split(';')
+                                .next()
+                                .and_then(|kv| {
+                                    kv.trim().strip_prefix(&format!("{QUARK_PUUS_COOKIE}="))
+                                })
+                                .map(str::to_string)
+                        });
                     let json: serde_json::Value = resp
                         .json()
                         .await
@@ -1380,10 +1420,23 @@ impl QuarkShareDriver {
                         )));
                     }
                     let data = json["data"].as_array().cloned().unwrap_or_default();
+                    let mut dl_cookie = req_cookie;
+                    if let Some(puus) = new_puus {
+                        let stripped = QuarkDriver::strip_puus(&dl_cookie);
+                        dl_cookie = if stripped.is_empty() {
+                            format!("{QUARK_PUUS_COOKIE}={puus}")
+                        } else {
+                            format!("{stripped}; {QUARK_PUUS_COOKIE}={puus}")
+                        };
+                        self.addition.cookie = dl_cookie.clone();
+                        if let Some(db) = db {
+                            let _ = self.persist(db).await;
+                        }
+                    }
                     let headers = vec![
                         format!("User-Agent: {QUARK_UA}"),
                         format!("Referer: {QUARK_REFERER}"),
-                        format!("Cookie: {req_cookie}"),
+                        format!("Cookie: {dl_cookie}"),
                     ];
                     for (i, item) in data.iter().enumerate() {
                         let Some(url) = item["download_url"].as_str() else { continue };
