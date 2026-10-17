@@ -200,9 +200,14 @@ function enterStorage(s: CloudStorage) {
   // `0`; Baidu starts at the mount root path. Quark share has no root_id field.
   let root = '0'
   try {
-    const addition = JSON.parse(s.addition) as { root_path?: string; root_id?: string }
+    const addition = JSON.parse(s.addition) as {
+      root_path?: string
+      root_id?: string
+      root_folder_id?: string
+    }
     if (s.driver === 'quark' || s.driver === 'm115') root = addition.root_id?.trim() || '0'
     else if (s.driver === 'm115_share' || s.driver === 'quark_share') root = '0'
+    else if (s.driver.startsWith('aliyun')) root = addition.root_folder_id?.trim() || 'root'
     else root = addition.root_path?.trim() || '/'
   } catch {
     // keep driver default above

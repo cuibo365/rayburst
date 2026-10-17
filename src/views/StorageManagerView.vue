@@ -82,6 +82,10 @@ const DRIVERS = [
   { label: '夸克分享', value: 'quark_share' },
   { label: '115 网盘', value: 'm115' },
   { label: '115 分享', value: 'm115_share' },
+  { label: '阿里云盘', value: 'aliyun_drive' },
+  { label: '阿里分享', value: 'aliyun_share' },
+  { label: '阿里云盘转115', value: 'aliyun_drive_115' },
+  { label: '阿里分享转115', value: 'aliyun_share_115' },
 ] as const
 
 const message = useMessage()
@@ -99,12 +103,17 @@ const form = ref<{
   client_id: string
   client_secret: string
   root_path: string
+  root_folder_id: string
+  oauth_token_url: string
   cookie: string
   root_id: string
   share_url: string
   share_code: string
   passcode: string
   receive_code: string
+  user_key: string
+  dir_id: string
+  open_copy_dir: string
   remark: string
 }>({
   mount_path: '',
@@ -113,12 +122,17 @@ const form = ref<{
   client_id: DEFAULT_CLIENT_ID,
   client_secret: DEFAULT_CLIENT_SECRET,
   root_path: '/',
+  root_folder_id: 'root',
+  oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
   cookie: '',
   root_id: '0',
   share_url: '',
   share_code: '',
   passcode: '',
   receive_code: '',
+  user_key: '',
+  dir_id: '0',
+  open_copy_dir: 'root',
   remark: '',
 })
 
@@ -128,6 +142,10 @@ const isQuark = computed(() => form.value.driver === 'quark')
 const isQuarkShare = computed(() => form.value.driver === 'quark_share')
 const isM115 = computed(() => form.value.driver === 'm115')
 const isM115Share = computed(() => form.value.driver === 'm115_share')
+const isAliyunDrive = computed(() => form.value.driver === 'aliyun_drive')
+const isAliyunShare = computed(() => form.value.driver === 'aliyun_share')
+const isAliyunDrive115 = computed(() => form.value.driver === 'aliyun_drive_115')
+const isAliyunShare115 = computed(() => form.value.driver === 'aliyun_share_115')
 
 function resetForm() {
   editingId.value = null
@@ -138,12 +156,17 @@ function resetForm() {
     client_id: DEFAULT_CLIENT_ID,
     client_secret: DEFAULT_CLIENT_SECRET,
     root_path: '/',
+    root_folder_id: 'root',
+    oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
     cookie: '',
     root_id: '0',
     share_url: '',
     share_code: '',
     passcode: '',
     receive_code: '',
+    user_key: '',
+    dir_id: '0',
+    open_copy_dir: 'root',
     remark: '',
   }
 }
@@ -168,12 +191,17 @@ function openEdit(s: CloudStorage) {
     client_id: (addition.client_id as string) ?? DEFAULT_CLIENT_ID,
     client_secret: (addition.client_secret as string) ?? DEFAULT_CLIENT_SECRET,
     root_path: (addition.root_path as string) ?? '/',
+    root_folder_id: (addition.root_folder_id as string) ?? 'root',
+    oauth_token_url: (addition.oauth_token_url as string) ?? 'https://api.alistgo.com/alist/ali_open/token',
     cookie: (addition.cookie as string) ?? '',
     root_id: (addition.root_id as string) ?? '0',
     share_url: (addition.share_url as string) ?? '',
     share_code: (addition.share_code as string) ?? '',
     passcode: (addition.passcode as string) ?? '',
     receive_code: (addition.receive_code as string) ?? '',
+    user_key: (addition.user_key as string) ?? '',
+    dir_id: (addition.dir_id as string) ?? '0',
+    open_copy_dir: (addition.open_copy_dir as string) ?? 'root',
     remark: s.remark,
   }
   showDialog.value = true
@@ -184,11 +212,16 @@ function onDriverChange() {
   form.value.client_id = DEFAULT_CLIENT_ID
   form.value.client_secret = DEFAULT_CLIENT_SECRET
   form.value.root_path = '/'
+  form.value.root_folder_id = 'root'
+  form.value.oauth_token_url = 'https://api.alistgo.com/alist/ali_open/token'
   form.value.cookie = ''
   form.value.root_id = '0'
   form.value.share_url = ''
   form.value.passcode = ''
   form.value.receive_code = ''
+  form.value.user_key = ''
+  form.value.dir_id = '0'
+  form.value.open_copy_dir = 'root'
 }
 
 // --- qrcode login (扫码获取 Cookie): quark / 115 ---
@@ -327,6 +360,50 @@ function buildAddition(): Record<string, unknown> {
       cookie: form.value.cookie.trim(),
     }
   }
+  if (form.value.driver === 'aliyun_drive') {
+    return {
+      refresh_token: form.value.refresh_token.trim(),
+      client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
+      client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
+      oauth_token_url: form.value.oauth_token_url.trim(),
+      root_folder_id: form.value.root_folder_id.trim() || 'root',
+    }
+  }
+  if (form.value.driver === 'aliyun_share') {
+    return {
+      refresh_token: form.value.refresh_token.trim(),
+      share_url: form.value.share_url.trim(),
+      share_code: form.value.share_code.trim(),
+      share_pwd: form.value.passcode.trim(),
+    }
+  }
+  if (form.value.driver === 'aliyun_drive_115') {
+    return {
+      refresh_token: form.value.refresh_token.trim(),
+      client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
+      client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
+      oauth_token_url: form.value.oauth_token_url.trim(),
+      root_folder_id: form.value.root_folder_id.trim() || 'root',
+      cookie: form.value.cookie.trim(),
+      user_key: form.value.user_key.trim(),
+      dir_id: form.value.dir_id.trim() || '0',
+    }
+  }
+  if (form.value.driver === 'aliyun_share_115') {
+    return {
+      refresh_token: form.value.refresh_token.trim(),
+      client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
+      client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
+      oauth_token_url: form.value.oauth_token_url.trim(),
+      open_copy_dir: form.value.open_copy_dir.trim() || 'root',
+      share_url: form.value.share_url.trim(),
+      share_code: form.value.share_code.trim(),
+      share_pwd: form.value.passcode.trim(),
+      cookie: form.value.cookie.trim(),
+      user_key: form.value.user_key.trim(),
+      dir_id: form.value.dir_id.trim() || '0',
+    }
+  }
   return {
     refresh_token: form.value.refresh_token.trim(),
     root_path: form.value.root_path.trim() || '/',
@@ -365,6 +442,44 @@ async function save() {
   if (form.value.driver === 'm115_share') {
     if (!form.value.share_url.trim() && !form.value.share_code.trim()) {
       message.warning('请填写 115 分享地址（https://115.com/s/xxxx 或 115cdn.com/s/xxxx）')
+      return
+    }
+  }
+  if (form.value.driver === 'aliyun_drive' && !form.value.refresh_token.trim()) {
+    message.warning('请填写阿里云盘 refresh_token')
+    return
+  }
+  if (form.value.driver === 'aliyun_share') {
+    if (!form.value.share_url.trim()) {
+      message.warning('请填写阿里分享地址（https://www.alipan.com/s/xxxx）')
+      return
+    }
+    if (!form.value.refresh_token.trim()) {
+      message.warning('请填写阿里云盘 refresh_token')
+      return
+    }
+  }
+  if (form.value.driver === 'aliyun_drive_115') {
+    if (!form.value.refresh_token.trim()) {
+      message.warning('请填写阿里云盘 refresh_token')
+      return
+    }
+    if (!form.value.cookie.trim()) {
+      message.warning('请填写 115 Cookie（闪传需要登录态）')
+      return
+    }
+  }
+  if (form.value.driver === 'aliyun_share_115') {
+    if (!form.value.share_url.trim()) {
+      message.warning('请填写阿里分享地址（https://www.alipan.com/s/xxxx）')
+      return
+    }
+    if (!form.value.refresh_token.trim()) {
+      message.warning('请填写阿里云盘 refresh_token（分享文件需先转存到你的阿里云盘）')
+      return
+    }
+    if (!form.value.cookie.trim()) {
+      message.warning('请填写 115 Cookie（闪传需要登录态）')
       return
     }
   }
@@ -489,7 +604,15 @@ onMounted(async () => {
                           ? '115 网盘'
                           : s.driver === 'm115_share'
                             ? '115 分享'
-                            : s.driver
+                            : s.driver === 'aliyun_drive'
+                              ? '阿里云盘'
+                              : s.driver === 'aliyun_share'
+                                ? '阿里分享'
+                                : s.driver === 'aliyun_drive_115'
+                                  ? '阿里云盘转115'
+                                  : s.driver === 'aliyun_share_115'
+                                    ? '阿里分享转115'
+                                    : s.driver
                 }}
               </td>
               <td>
@@ -685,6 +808,117 @@ onMounted(async () => {
             Cookies 全选复制（形如 <code>UID=xxx; CID=yyy; SEID=zzz</code>），或点右上角「扫码获取」用 115 App
             自动获取。
           </p>
+        </template>
+
+        <template v-else-if="isAliyunDrive || isAliyunDrive115">
+          <NFormItem label="阿里云盘 refresh_token">
+            <NInput
+              v-model:value="form.refresh_token"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="粘贴阿里云盘开放平台 refresh_token（网页授权后获取，形如 1A2B... 较长）"
+            />
+          </NFormItem>
+          <p class="storage-quark-tip">
+            <strong>获取方式：</strong>参考 alist「阿里云盘 Open」——在
+            <code>https://openapi.alipan.com/oauth/authorize</code> 授权后拿 refresh_token（也可用第三方托管 alist
+            扫码获取）。此处暂未内置扫码，请手动粘贴。
+          </p>
+          <NSpace :size="12">
+            <NFormItem label="client_id" class="storage-flex-item">
+              <NInput v-model:value="form.client_id" placeholder="默认 alist 官方 client_id" />
+            </NFormItem>
+            <NFormItem label="client_secret" class="storage-flex-item">
+              <NInput v-model:value="form.client_secret" placeholder="默认 alist 官方 client_secret" />
+            </NFormItem>
+          </NSpace>
+          <NFormItem label="oauth_token_url（自建托管时填写）">
+            <NInput v-model:value="form.oauth_token_url" placeholder="https://api.alistgo.com/alist/ali_open/token" />
+          </NFormItem>
+          <NFormItem v-if="isAliyunDrive" label="root_folder_id（挂载根目录）">
+            <NInput v-model:value="form.root_folder_id" placeholder="root = 网盘根目录，也可填具体文件夹 file_id" />
+          </NFormItem>
+          <template v-if="isAliyunDrive115">
+            <NFormItem label="115 Cookie">
+              <NInput
+                v-model:value="form.cookie"
+                type="textarea"
+                :autosize="{ minRows: 3, maxRows: 6 }"
+                placeholder="登录 115.com 后复制（需含 UID/CID/SEID）"
+              />
+            </NFormItem>
+            <NFormItem label="dir_id（闪传落盘目录 cid）">
+              <NInput
+                v-model:value="form.dir_id"
+                placeholder="0 = 网盘根目录（下载的文件会以时间戳后缀转存到该目录）"
+              />
+            </NFormItem>
+            <NFormItem label="user_key（非必填）">
+              <NInput v-model:value="form.user_key" placeholder="115 用户名/手机号，留空自动从 Cookie 解析" />
+            </NFormItem>
+            <p class="storage-quark-tip">
+              下载流程：阿里文件 SHA1 → 115 闪传（秒传命中即取 pickcode）→ 生成 115 CDN 直链。闪传是上传通道，
+              <strong>不消耗 115 云下载配额</strong>；文件会出现在你的 115 网盘「最近接受」，属 115 全局行为。
+            </p>
+          </template>
+        </template>
+
+        <template v-else-if="isAliyunShare || isAliyunShare115">
+          <NFormItem label="分享地址">
+            <NInput v-model:value="form.share_url" placeholder="https://www.alipan.com/s/xxxx（可带 ?pwd= 提取码）" />
+          </NFormItem>
+          <NFormItem label="提取码（非必填）">
+            <NInput v-model:value="form.passcode" placeholder="分享链接未带 pwd 时使用此提取码" />
+          </NFormItem>
+          <NFormItem label="阿里云盘 refresh_token">
+            <NInput
+              v-model:value="form.refresh_token"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="粘贴你自己的阿里云盘 refresh_token（分享文件需转存到你的盘）"
+            />
+          </NFormItem>
+          <p class="storage-quark-tip">
+            <strong>注意：</strong>分享文件无 SHA1，下载前会先 <code>v2/file/copy</code> 转存到你自己的阿里云盘
+            （默认根目录，见下方「转存目录」），再走 SHA1 → 115 闪传 → 直链。
+          </p>
+          <template v-if="isAliyunShare115">
+            <NSpace :size="12">
+              <NFormItem label="client_id" class="storage-flex-item">
+                <NInput v-model:value="form.client_id" placeholder="默认 alist 官方 client_id" />
+              </NFormItem>
+              <NFormItem label="client_secret" class="storage-flex-item">
+                <NInput v-model:value="form.client_secret" placeholder="默认 alist 官方 client_secret" />
+              </NFormItem>
+            </NSpace>
+            <NFormItem label="oauth_token_url（自建托管时填写）">
+              <NInput v-model:value="form.oauth_token_url" placeholder="https://api.alistgo.com/alist/ali_open/token" />
+            </NFormItem>
+            <NFormItem label="转存目录（open_copy_dir）">
+              <NInput v-model:value="form.open_copy_dir" placeholder="root = 网盘根目录，也可填文件夹 file_id" />
+            </NFormItem>
+            <NFormItem label="115 Cookie">
+              <NInput
+                v-model:value="form.cookie"
+                type="textarea"
+                :autosize="{ minRows: 3, maxRows: 6 }"
+                placeholder="登录 115.com 后复制（需含 UID/CID/SEID）"
+              />
+            </NFormItem>
+            <NFormItem label="dir_id（闪传落盘目录 cid）">
+              <NInput
+                v-model:value="form.dir_id"
+                placeholder="0 = 网盘根目录（下载的文件会以时间戳后缀转存到该目录）"
+              />
+            </NFormItem>
+            <NFormItem label="user_key（非必填）">
+              <NInput v-model:value="form.user_key" placeholder="115 用户名/手机号，留空自动从 Cookie 解析" />
+            </NFormItem>
+            <p class="storage-quark-tip">
+              下载流程：分享文件 → 转存到你阿里云盘 → SHA1 → 115 闪传（不耗云下载配额）→ 115 CDN 直链。文件会出现在
+              115「最近接受」。
+            </p>
+          </template>
         </template>
 
         <NFormItem label="备注">

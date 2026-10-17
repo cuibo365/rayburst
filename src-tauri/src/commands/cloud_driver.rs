@@ -11,6 +11,10 @@
 
 use crate::database::{CloudStorage, Database, DatabaseState};
 use crate::error::AppError;
+use crate::commands::aliyun_drive_115::{AliyunDrive115Addition, AliyunDrive115Driver};
+use crate::commands::aliyun_open::{AliyunOpenAddition, AliyunOpenDriver};
+use crate::commands::aliyun_share::{AliyunShareAddition, AliyunShareDriver};
+use crate::commands::aliyun_share_115::{AliyunShare115Addition, AliyunShare115Driver};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
@@ -60,7 +64,7 @@ static M115_APP_VER: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::cons
 /// `Mozilla/5.0 115Browser/<ver>` — the UA used for list/download requests.
 /// The CDN URL returned by downurl is bound to this UA, so the same UA must
 /// ride along in the aria2 headers (alist passes it through identically).
-async fn m115_ua() -> String {
+pub(crate) async fn m115_ua() -> String {
     let ver = M115_APP_VER
         .get_or_init(|| async {
             let client = reqwest::Client::builder()
@@ -270,6 +274,10 @@ pub enum CloudDriver {
     QuarkShare(QuarkShareDriver),
     M115(M115Driver),
     M115Share(M115ShareDriver),
+    AliyunDrive(AliyunOpenDriver),
+    AliyunShare(AliyunShareDriver),
+    AliyunDrive115(AliyunDrive115Driver),
+    AliyunShare115(AliyunShare115Driver),
 }
 
 impl CloudDriver {
@@ -302,6 +310,36 @@ impl CloudDriver {
                     addition,
                 }))
             }
+            "aliyun_drive" => Ok(CloudDriver::AliyunDrive(AliyunOpenDriver {
+                id: storage.id,
+                addition: AliyunOpenAddition::parse(&storage.addition)?,
+            })),
+            "aliyun_share" => {
+                let mut addition = AliyunShareAddition::parse(&storage.addition)?;
+                if addition.share_id.is_empty() {
+                    (addition.share_id, addition.share_pwd) =
+                        AliyunShareAddition::parse_share_url(&addition.share_url);
+                }
+                Ok(CloudDriver::AliyunShare(AliyunShareDriver {
+                    id: storage.id,
+                    addition,
+                }))
+            }
+            "aliyun_drive_115" => Ok(CloudDriver::AliyunDrive115(AliyunDrive115Driver {
+                id: storage.id,
+                addition: AliyunDrive115Addition::parse(&storage.addition)?,
+            })),
+            "aliyun_share_115" => {
+                let mut addition = AliyunShare115Addition::parse(&storage.addition)?;
+                if addition.share_id.is_empty() {
+                    (addition.share_id, addition.share_pwd) =
+                        AliyunShareAddition::parse_share_url(&addition.share_url);
+                }
+                Ok(CloudDriver::AliyunShare115(AliyunShare115Driver {
+                    id: storage.id,
+                    addition,
+                }))
+            }
             other => Err(AppError::CloudDrive(format!(
                 "不支持的驱动类型：{other}"
             ))),
@@ -315,6 +353,10 @@ impl CloudDriver {
             CloudDriver::QuarkShare(_) => "quark_share",
             CloudDriver::M115(_) => "m115",
             CloudDriver::M115Share(_) => "m115_share",
+            CloudDriver::AliyunDrive(_) => "aliyun_drive",
+            CloudDriver::AliyunShare(_) => "aliyun_share",
+            CloudDriver::AliyunDrive115(_) => "aliyun_drive_115",
+            CloudDriver::AliyunShare115(_) => "aliyun_share_115",
         }
     }
 
@@ -335,6 +377,10 @@ impl CloudDriver {
             CloudDriver::QuarkShare(d) => d.list(Some(db), path).await,
             CloudDriver::M115(d) => d.list(db, path).await,
             CloudDriver::M115Share(d) => d.list(db, path).await,
+            CloudDriver::AliyunDrive(d) => d.list(db, path).await,
+            CloudDriver::AliyunShare(d) => d.list(db, path).await,
+            CloudDriver::AliyunDrive115(d) => d.list(db, path).await,
+            CloudDriver::AliyunShare115(d) => d.list(db, path).await,
         };
         let status = match &result {
             Ok(_) => "正常".to_string(),
@@ -354,6 +400,18 @@ impl CloudDriver {
                 d.set_status(db, &status).await;
             }
             CloudDriver::M115Share(d) => {
+                d.set_status(db, &status).await;
+            }
+            CloudDriver::AliyunDrive(d) => {
+                d.set_status(db, &status).await;
+            }
+            CloudDriver::AliyunShare(d) => {
+                d.set_status(db, &status).await;
+            }
+            CloudDriver::AliyunDrive115(d) => {
+                d.set_status(db, &status).await;
+            }
+            CloudDriver::AliyunShare115(d) => {
                 d.set_status(db, &status).await;
             }
         }
@@ -1966,6 +2024,10 @@ pub async fn cloud_drive_storage_download(
         CloudDriver::QuarkShare(d) => d.get_dlinks(Some(&db.0), &files).await?,
         CloudDriver::M115(d) => d.get_dlinks(&db.0, &files).await?,
         CloudDriver::M115Share(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::AliyunDrive(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::AliyunShare(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::AliyunDrive115(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::AliyunShare115(d) => d.get_dlinks(&db.0, &files).await?,
     };
 
     let default_dir: Option<String> = app

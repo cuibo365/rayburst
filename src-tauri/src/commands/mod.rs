@@ -1,4 +1,8 @@
 pub mod aria2;
+pub mod aliyun_drive_115;
+pub mod aliyun_open;
+pub mod aliyun_share;
+pub mod aliyun_share_115;
 pub mod bt_blocklist;
 pub mod cloud_drive;
 pub mod cloud_driver;
@@ -15,6 +19,7 @@ pub mod http_auth;
 mod http_client;
 pub mod logging;
 pub mod m115_crypto;
+pub mod m115_rapid;
 pub mod notification;
 pub mod power;
 pub mod protocol;

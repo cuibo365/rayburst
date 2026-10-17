@@ -1,0 +1,350 @@
+//! Aliyun Drive (open platform) driver — port of alist `drivers/aliyundrive_open`.
+//!
+//! - token refresh: official `POST /oauth/access_token` (needs client_id /
+//!   client_secret) or a hosted renew GET endpoint (alist-compatible, works
+//!   with a bare refresh_token).
+//! - drive info: `POST /adrive/v1.0/user/getDriveInfo` → `default_drive_id`.
+//! - list: `POST /adrive/v1.0/openFile/list` (marker pagination, limit 200).
+//! - download: `POST /adrive/v1.0/openFile/getDownloadUrl` → CDN url.
+//!
+//! File objects carry `content_hash` (SHA1 hex); the *To115 drivers reuse it
+//! as the 115 rapid-upload QuickID.
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::AppError;
+use crate::database::Database;
+
+pub const ALIYUN_API: &str = "https://openapi.alipan.com";
+const ALIYUN_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+pub fn default_root() -> String {
+    "root".into()
+}
+
+pub fn default_oauth_url() -> String {
+    "https://api.alistgo.com/alist/ali_open/token".into()
+}
+
+/// Aliyun open addition (persisted in `cloud_storages.addition`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AliyunOpenAddition {
+    pub refresh_token: String,
+    /// Official open-platform credentials; leave empty to use the hosted
+    /// renew endpoint (`oauth_token_url`).
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    /// Browse root; `root` = drive root.
+    #[serde(default = "default_root")]
+    pub root_folder_id: String,
+    /// Sort key: name / size / updated_at / created_at (empty = default).
+    #[serde(default)]
+    pub order_by: String,
+    /// ASC / DESC.
+    #[serde(default)]
+    pub order_direction: String,
+    /// Hosted renew endpoint used when client_id/client_secret are empty.
+    #[serde(default = "default_oauth_url")]
+    pub oauth_token_url: String,
+    // ---- runtime token cache (persisted so a renewed refresh_token survives) ----
+    #[serde(default)]
+    pub access_token: String,
+    #[serde(default)]
+    pub token_expires_at: u64,
+    #[serde(default)]
+    pub drive_id: String,
+}
+
+impl AliyunOpenAddition {
+    pub fn parse(json: &str) -> Result<Self, AppError> {
+        serde_json::from_str(json)
+            .map_err(|e| AppError::CloudDrive(format!("解析驱动配置失败: {e}")))
+    }
+    fn to_json(&self) -> Result<String, AppError> {
+        serde_json::to_string(self)
+            .map_err(|e| AppError::CloudDrive(format!("序列化驱动配置失败: {e}")))
+    }
+}
+
+pub struct AliyunOpenDriver {
+    pub id: i64,
+    pub addition: AliyunOpenAddition,
+}
+
+impl AliyunOpenDriver {
+    fn http_client() -> Result<reqwest::Client, AppError> {
+        reqwest::Client::builder()
+            .user_agent(ALIYUN_UA)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    pub async fn persist(&self, db: &Database) -> Result<(), AppError> {
+        db.update_storage_addition(self.id, &self.addition.to_json()?)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_status(&self, db: &Database, status: &str) -> Result<(), AppError> {
+        db.set_storage_status(self.id, status).await
+    }
+
+    /// Refresh → access_token; persists a newly rotated refresh_token.
+    pub async fn ensure_access_token(&mut self, db: &Database) -> Result<String, AppError> {
+        if !self.addition.access_token.is_empty()
+            && self.addition.token_expires_at > Self::now()
+        {
+            return Ok(self.addition.access_token.clone());
+        }
+        let client = Self::http_client()?;
+        let json: serde_json::Value;
+        if !self.addition.client_id.is_empty() && !self.addition.client_secret.is_empty() {
+            // official endpoint
+            let resp = client
+                .post(format!("{ALIYUN_API}/oauth/access_token"))
+                .json(&serde_json::json!({
+                    "grant_type": "refresh_token",
+                    "refresh_token": self.addition.refresh_token,
+                    "client_id": self.addition.client_id,
+                    "client_secret": self.addition.client_secret,
+                }))
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("刷新 access_token 失败: {e}")))?;
+            json = resp
+                .json()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("解析 token 响应失败: {e}")))?;
+        } else if !self.addition.oauth_token_url.is_empty() {
+            // hosted renew (alist-compatible): GET ?refresh_ui=<refresh_token>
+            let url = format!(
+                "{}?refresh_ui={}&server_use=true&driver_txt=alicloud_qr",
+                self.addition.oauth_token_url,
+                urlencoding::encode(&self.addition.refresh_token)
+            );
+            let resp = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
+            json = resp
+                .json()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
+        } else {
+            return Err(AppError::CloudDrive(
+                "缺少阿里云盘 client_id/client_secret（或托管刷新地址），无法刷新 token".into(),
+            ));
+        }
+        let access = json["access_token"]
+            .as_str()
+            .ok_or_else(|| AppError::CloudDrive("阿里云盘刷新响应缺少 access_token".into()))?
+            .to_string();
+        if let Some(new_refresh) = json["refresh_token"].as_str() {
+            if !new_refresh.is_empty() {
+                self.addition.refresh_token = new_refresh.to_string();
+            }
+        }
+        let expires_in = json["expires_in"].as_u64().unwrap_or(25 * 24 * 3600);
+        self.addition.access_token = access.clone();
+        self.addition.token_expires_at = Self::now() + expires_in;
+        self.persist(db).await?;
+        Ok(access)
+    }
+
+    /// Get the default drive id (cached).
+    pub async fn ensure_drive_id(
+        &mut self,
+        db: &Database,
+        access_token: &str,
+    ) -> Result<String, AppError> {
+        if !self.addition.drive_id.is_empty() {
+            return Ok(self.addition.drive_id.clone());
+        }
+        let client = Self::http_client()?;
+        let resp = client
+            .post(format!("{ALIYUN_API}/adrive/v1.0/user/getDriveInfo"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("获取阿里云盘信息失败: {e}")))?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("解析阿里云盘信息失败: {e}")))?;
+        let drive_id = json["default_drive_id"]
+            .as_str()
+            .or_else(|| json["drive_id"].as_str())
+            .ok_or_else(|| {
+                AppError::CloudDrive(format!(
+                    "阿里云盘信息响应缺少 drive_id: {}",
+                    json.get("message").and_then(|m| m.as_str()).unwrap_or("")
+                ))
+            })?
+            .to_string();
+        self.addition.drive_id = drive_id.clone();
+        self.persist(db).await?;
+        Ok(drive_id)
+    }
+
+    /// List children of `file_id` (`root`/empty = configured root).
+    pub async fn list(
+        &mut self,
+        db: &Database,
+        file_id: &str,
+    ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
+        let token = self.ensure_access_token(db).await?;
+        let drive_id = self.ensure_drive_id(db, &token).await?;
+        let client = Self::http_client()?;
+        let parent = if file_id.is_empty() || file_id == "root" {
+            let root = self.addition.root_folder_id.trim();
+            if root.is_empty() {
+                "root".to_string()
+            } else {
+                root.to_string()
+            }
+        } else {
+            file_id.to_string()
+        };
+        const MAX_PAGES: usize = 100;
+        let mut out = Vec::new();
+        let mut marker = String::new();
+        for _ in 0..MAX_PAGES {
+            let mut body = serde_json::json!({
+                "drive_id": drive_id,
+                "limit": 200,
+                "parent_file_id": parent,
+                "marker": marker,
+            });
+            if !self.addition.order_by.is_empty() {
+                body["order_by"] = serde_json::Value::String(self.addition.order_by.clone());
+            }
+            if !self.addition.order_direction.is_empty() {
+                body["order_direction"] =
+                    serde_json::Value::String(self.addition.order_direction.clone());
+            }
+            let resp = client
+                .post(format!("{ALIYUN_API}/adrive/v1.0/openFile/list"))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求阿里云盘列表失败: {e}")))?;
+            let status = resp.status();
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("解析阿里云盘列表失败: {e}")))?;
+            if !status.is_success() {
+                return Err(AppError::CloudDrive(format!(
+                    "阿里云盘列表失败（HTTP {status}）：{}",
+                    json.get("message").and_then(|m| m.as_str()).unwrap_or("")
+                )));
+            }
+            let items = json["items"].as_array().cloned().unwrap_or_default();
+            for item in items {
+                out.push(alist_file_to_drive(&item));
+            }
+            marker = json["next_marker"].as_str().unwrap_or("").to_string();
+            if marker.is_empty() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Resolve CDN download URLs for the selected files.
+    pub async fn get_dlinks(
+        &mut self,
+        db: &Database,
+        files: &[crate::commands::CloudDriveFile],
+    ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
+        let token = self.ensure_access_token(db).await?;
+        let drive_id = self.ensure_drive_id(db, &token).await?;
+        let client = Self::http_client()?;
+        let mut result = Vec::new();
+        for file in files {
+            if file.isdir || file.id.is_empty() {
+                continue;
+            }
+            let resp = client
+                .post(format!("{ALIYUN_API}/adrive/v1.0/openFile/getDownloadUrl"))
+                .bearer_auth(&token)
+                .json(&serde_json::json!({
+                    "drive_id": drive_id,
+                    "file_id": file.id,
+                    "expire_sec": 14400,
+                }))
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求 {} 下载地址失败: {e}", file.name)))?;
+            let status = resp.status();
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("解析 {} 下载响应失败: {e}", file.name)))?;
+            if !status.is_success() {
+                return Err(AppError::CloudDrive(format!(
+                    "获取 {} 下载地址失败（HTTP {status}）：{}",
+                    file.name,
+                    json.get("message").and_then(|m| m.as_str()).unwrap_or("")
+                )));
+            }
+            let url = json["url"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| json["streamsUrl"]["jpeg"].as_str().map(str::to_string))
+                .ok_or_else(|| AppError::CloudDrive(format!("阿里云盘未返回 {} 的下载地址", file.name)))?;
+            // The CDN url is pre-signed; alist sends no extra headers.
+            result.push((file.clone(), url, vec![]));
+        }
+        if result.is_empty() {
+            return Err(AppError::CloudDrive("未能获取任何阿里云盘文件的下载地址".into()));
+        }
+        Ok(result)
+    }
+}
+
+/// Map an aliyun open list item to a `CloudDriveFile`.
+///
+/// Convention shared with quark/m115: `path` carries the driver's folder key
+/// (here the file_id) — the frontend uses it as the browse key and
+/// `expand_folders` recurses with it.
+pub(crate) fn alist_file_to_drive(item: &serde_json::Value) -> crate::commands::CloudDriveFile {
+    let file_id = item["file_id"].as_str().unwrap_or("").to_string();
+    let name = item["name"].as_str().unwrap_or("").to_string();
+    let isdir = item["type"].as_str() == Some("folder");
+    crate::commands::CloudDriveFile {
+        fs_id: 0,
+        name,
+        size: item["size"].as_u64().unwrap_or(0),
+        path: file_id.clone(),
+        isdir,
+        mtime: parse_aliyun_time(item["updated_at"].as_str().unwrap_or("")),
+        category: 0,
+        id: file_id,
+        rel_path: String::new(),
+        pdir_fid: item["parent_file_id"].as_str().unwrap_or("").to_string(),
+        share_fid_token: String::new(),
+        pickcode: String::new(),
+        sha1: item["content_hash"].as_str().unwrap_or("").to_string(),
+    }
+}
+
+/// Parse an aliyun RFC3339 timestamp (e.g. `2024-01-01T12:00:00.000Z`).
+pub(crate) fn parse_aliyun_time(s: &str) -> u64 {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return dt.timestamp().max(0) as u64;
+    }
+    0
+}

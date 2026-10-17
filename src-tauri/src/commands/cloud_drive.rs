@@ -44,6 +44,10 @@ pub struct CloudDriveFile {
     /// Baidu/Quark (which resolve dlinks by fs_id / fid).
     #[serde(default)]
     pub pickcode: String,
+    /// Aliyun open driver: `content_hash` (SHA1 hex) of the file; reused as
+    /// the 115 rapid-upload QuickID by the *To115 drivers. Empty otherwise.
+    #[serde(default)]
+    pub sha1: String,
 }
 
 #[derive(Debug, Serialize)]
