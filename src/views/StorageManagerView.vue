@@ -670,16 +670,6 @@ onMounted(async () => {
   gap: 8px;
   width: 100%;
 }
-/* Let the #label slot stretch across the dialog so 扫码获取 sits flush right.
-   naive-ui wraps slot content in `.n-form-item-label__text` (inline), so it
-   must become a flex row too — otherwise width:100% can't stretch it. */
-.storage-dialog :deep(.n-form-item-label) {
-  width: 100%;
-}
-.storage-dialog :deep(.n-form-item-label__text) {
-  display: flex;
-  width: 100%;
-}
 .qr-box {
   display: flex;
   justify-content: center;
@@ -721,5 +711,23 @@ onMounted(async () => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+</style>
+
+<!--
+  NModal teleports its content to <body>, so scoped styles can never reach the
+  dialog's inner DOM. These global rules are pinned to .storage-dialog to make
+  the 扫码获取 buttons sit flush right in the form label row.
+-->
+<style>
+.storage-dialog .n-form-item-label {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.storage-dialog .n-form-item-label__text {
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 </style>
