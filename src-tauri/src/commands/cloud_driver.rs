@@ -943,7 +943,7 @@ impl M115Driver {
             let key = crate::commands::m115_crypto::generate_key();
             let body = serde_json::json!({ "pickcode": file.pickcode }).to_string();
             let data = crate::commands::m115_crypto::encode(body.as_bytes(), &key);
-            let url = format!("{M115_DOWN_URL}?t={}", chrono::Utc::now().timestamp_millis());
+            let url = format!("{M115_DOWN_URL}?t={}", chrono::Utc::now().timestamp());
             let resp = client
                 .post(&url)
                 .header("Cookie", &self.addition.cookie)
@@ -974,9 +974,25 @@ impl M115Driver {
                 .map_err(|e| AppError::CloudDrive(format!("解密 115 下载响应失败: {e}")))?;
             let plain_json: serde_json::Value = serde_json::from_slice(&plain)
                 .map_err(|e| AppError::CloudDrive(format!("解析 115 下载数据失败: {e}")))?;
-            let dlink = plain_json[file.pickcode.as_str()]["url"]["url"]
-                .as_str()
+            // The decrypted payload is `{ <key>: {file_name, file_size, pick_code, url{url}} }`.
+            // The SDK iterates the whole map and returns the first valid url
+            // (the map key is not guaranteed to be the pickcode), so mirror that:
+            // walk object values / arrays / a bare object to find `url.url`.
+            fn extract_dlink(v: &serde_json::Value) -> Option<&str> {
+                v["url"]["url"].as_str().or_else(|| {
+                    v.as_object()
+                        .and_then(|o| o.values().find_map(extract_dlink))
+                })
+            }
+            let dlink = extract_dlink(&plain_json)
+                .or_else(|| {
+                    plain_json
+                        .as_array()
+                        .and_then(|a| a.iter().find_map(extract_dlink))
+                })
                 .ok_or_else(|| {
+                    let sample = String::from_utf8_lossy(&plain);
+                    log::warn!("115 downurl 响应结构异常: {}", &sample[..sample.len().min(400)]);
                     AppError::CloudDrive(format!("115 未返回 {} 的下载地址", file.name))
                 })?
                 .to_string();
@@ -1889,7 +1905,7 @@ pub async fn cloud_drive_115_qrcode_status(
         urlencoding::encode(&uid),
         time,
         urlencoding::encode(&sign),
-        chrono::Utc::now().timestamp_millis()
+        chrono::Utc::now().timestamp()
     );
     let resp = client
         .get(&url)
