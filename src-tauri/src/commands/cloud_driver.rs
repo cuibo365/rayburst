@@ -35,7 +35,12 @@ const QUARK_MAX_ATTEMPTS: usize = 2;
 /// 115 Netdisk drive (mirrors alist `drivers/115` + SheltonZhu/115driver).
 const M115_FILE_LIST_URL: &str = "https://webapi.115.com/files";
 const M115_DOWN_URL: &str = "https://proapi.115.com/app/chrome/downurl";
-const M115_UA: &str = "Mozilla/5.0 115Browser/27.0.5.7";
+const M115_APP_VERSION_URL: &str = "https://appversion.115.com/1/web/1.0/api/chrome";
+/// Fallback 115Browser version, refreshed from appversion.115.com at runtime
+/// (alist `appver.go`): the CDN rejects stale client versions with 403.
+const M115_UA_FALLBACK: &str = "27.0.5.7";
+/// Referer for list / QR endpoints; the download path intentionally carries
+/// none (mirrors alist/SDK: downurl + CDN only see UA and Cookie).
 const M115_REFERER: &str = "https://115.com/";
 /// Default list page size (alist default 1000; server caps at MaxDirPageLimit).
 const M115_PAGE_SIZE: i64 = 1000;
@@ -43,6 +48,38 @@ const M115_PAGE_SIZE: i64 = 1000;
 const M115_QRCODE_TOKEN_URL: &str = "https://qrcodeapi.115.com/api/1.0/web/1.0/token";
 const M115_QRCODE_STATUS_URL: &str = "https://qrcodeapi.115.com/get/status/";
 const M115_QRCODE_LOGIN_URL: &str = "https://passportapi.115.com/app/1.0/web/1.0/login/qrcode";
+
+/// Latest 115Browser version (fetched once; falls back to `M115_UA_FALLBACK`).
+static M115_APP_VER: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+
+/// `Mozilla/5.0 115Browser/<ver>` — the UA used for list/download requests.
+/// The CDN URL returned by downurl is bound to this UA, so the same UA must
+/// ride along in the aria2 headers (alist passes it through identically).
+async fn m115_ua() -> String {
+    let ver = M115_APP_VER
+        .get_or_init(|| async {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build();
+            let ver = match client {
+                Ok(c) => c
+                    .get(M115_APP_VERSION_URL)
+                    .send()
+                    .await
+                    .ok()
+                    .and_then(|r| r.json::<serde_json::Value>().await.ok())
+                    .and_then(|j| j["data"]["app_versions"].as_array().cloned())
+                    .and_then(|arr| {
+                        arr.into_iter().find(|v| v["app_name"].as_str() == Some("win"))
+                    })
+                    .and_then(|v| v["version"].as_str().map(str::to_string)),
+                Err(_) => None,
+            };
+            ver.unwrap_or_else(|| M115_UA_FALLBACK.to_string())
+        })
+        .await;
+    format!("Mozilla/5.0 115Browser/{ver}")
+}
 
 /// Baidu Netdisk driver addition (persisted in `cloud_storages.addition`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -765,9 +802,9 @@ pub struct M115Driver {
 }
 
 impl M115Driver {
-    fn http_client() -> Result<reqwest::Client, AppError> {
+    fn http_client(ua: &str) -> Result<reqwest::Client, AppError> {
         reqwest::Client::builder()
-            .user_agent(M115_UA)
+            .user_agent(ua)
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))
@@ -814,8 +851,9 @@ impl M115Driver {
         const MAX_PAGES: usize = 100; // 安全上限，防异常死循环
         let mut out = Vec::new();
         let mut offset: i64 = 0;
+        let ua = m115_ua().await;
         for _ in 0..MAX_PAGES {
-            let client = Self::http_client()?;
+            let client = Self::http_client(&ua)?;
             let offset_s = offset.to_string();
             let limit_s = M115_PAGE_SIZE.to_string();
             let url = reqwest::Url::parse_with_params(
@@ -935,11 +973,12 @@ impl M115Driver {
         files: &[crate::commands::CloudDriveFile],
     ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
         let mut result = Vec::new();
+        let ua = m115_ua().await;
         for file in files {
             if file.isdir || file.pickcode.is_empty() {
                 continue;
             }
-            let client = Self::http_client()?;
+            let client = Self::http_client(&ua)?;
             let key = crate::commands::m115_crypto::generate_key();
             let body = serde_json::json!({ "pickcode": file.pickcode }).to_string();
             let data = crate::commands::m115_crypto::encode(body.as_bytes(), &key);
@@ -947,7 +986,6 @@ impl M115Driver {
             let resp = client
                 .post(&url)
                 .header("Cookie", &self.addition.cookie)
-                .header("Referer", M115_REFERER)
                 .form(&[("data", data.as_str())])
                 .header("Content-Type", "application/json;charset=UTF-8")
                 .send()
@@ -996,9 +1034,10 @@ impl M115Driver {
                     AppError::CloudDrive(format!("115 未返回 {} 的下载地址", file.name))
                 })?
                 .to_string();
+            // The CDN URL is bound to the UA that requested it and requires the
+            // account cookie; alist/SDK send only UA + Cookie (no Referer).
             let headers = vec![
-                format!("User-Agent: {M115_UA}"),
-                format!("Referer: {M115_REFERER}"),
+                format!("User-Agent: {ua}"),
                 format!("Cookie: {}", self.addition.cookie),
             ];
             result.push((file.clone(), dlink, headers));
@@ -1846,7 +1885,7 @@ pub struct M115QrcodeStatus {
 #[tauri::command]
 pub async fn cloud_drive_115_qrcode_create() -> Result<M115QrcodeCreated, AppError> {
     let client = reqwest::Client::builder()
-        .user_agent(M115_UA)
+        .user_agent(format!("Mozilla/5.0 115Browser/{M115_UA_FALLBACK}"))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
@@ -1896,7 +1935,7 @@ pub async fn cloud_drive_115_qrcode_status(
     sign: String,
 ) -> Result<M115QrcodeStatus, AppError> {
     let client = reqwest::Client::builder()
-        .user_agent(M115_UA)
+        .user_agent(format!("Mozilla/5.0 115Browser/{M115_UA_FALLBACK}"))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
