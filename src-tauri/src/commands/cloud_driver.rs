@@ -67,11 +67,8 @@ async fn m115_ua() -> String {
                         Ok(resp) => resp.json::<serde_json::Value>().await.ok(),
                         Err(_) => None,
                     };
-                    json.and_then(|j| j["data"]["app_versions"].as_array().cloned())
-                        .and_then(|arr| {
-                            arr.into_iter().find(|v| v["app_name"].as_str() == Some("win"))
-                        })
-                        .and_then(|v| v["version"].as_str().map(str::to_string))
+                    // SDK Versions is `data: { win: {version_code, ...}, android: {...} }`
+                    json.and_then(|j| j["data"]["win"]["version_code"].as_str().map(str::to_string))
                 }
                 Err(_) => None,
             };
@@ -992,6 +989,16 @@ impl M115Driver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 115 下载地址失败: {e}")))?;
             let status = resp.status();
+            // The CDN rejects the download request (HTTP 403) unless it carries
+            // the cookie issued by this downurl response; merge every Set-Cookie
+            // into the download header, mirroring the SDK's buildDownloadHeaders.
+            let set_cookies: Vec<String> = resp
+                .headers()
+                .get_all(reqwest::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(str::to_string))
+                .filter(|s| !s.is_empty())
+                .collect();
             let text = resp
                 .text()
                 .await
@@ -1036,9 +1043,15 @@ impl M115Driver {
                 .to_string();
             // The CDN URL is bound to the UA that requested it and requires the
             // account cookie; alist/SDK send only UA + Cookie (no Referer).
+            // The downurl-issued CDN cookie(s) are mandatory for the CDN fetch.
+            let mut cookie = self.addition.cookie.clone();
+            for c in &set_cookies {
+                cookie.push_str("; ");
+                cookie.push_str(c);
+            }
             let headers = vec![
                 format!("User-Agent: {ua}"),
-                format!("Cookie: {}", self.addition.cookie),
+                format!("Cookie: {cookie}"),
             ];
             result.push((file.clone(), dlink, headers));
         }
