@@ -501,21 +501,22 @@ onMounted(async () => {
 
         <template v-else-if="isQuark">
           <NFormItem label="Cookie">
-            <div class="storage-token-row storage-token-row--stack">
-              <NInput
-                v-model:value="form.cookie"
-                type="textarea"
-                :autosize="{ minRows: 4, maxRows: 8 }"
-                placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
-              />
-              <NButton size="small" secondary class="storage-token-get" @click="openQrcode"> 扫码获取 </NButton>
-            </div>
+            <template #label>
+              <div class="storage-cookie-label">
+                <span>Cookie</span>
+                <NButton size="tiny" secondary @click="openQrcode">扫码获取</NButton>
+              </div>
+            </template>
+            <NInput
+              v-model:value="form.cookie"
+              type="textarea"
+              :autosize="{ minRows: 4, maxRows: 8 }"
+              placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
+            />
           </NFormItem>
           <p class="storage-quark-tip">
-            获取方式：浏览器登录 <code>pan.quark.cn</code> → 按 F12 打开开发者工具 → Application → Cookies →
-            全选复制（形如 <code>xxx=yyy; zzz=aaa</code>）。Cookie 失效后需重新复制更新；也可用<strong
-              >夸克 App 扫码</strong
-            >自动获取。
+            浏览器登录 <code>pan.quark.cn</code> → F12 → Application → Cookies 全选复制（形如
+            <code>xxx=yyy; zzz=aaa</code>）；或点右上角「扫码获取」用夸克 App 自动获取。
           </p>
           <NFormItem label="root_id（挂载根目录 fid）">
             <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
@@ -530,21 +531,22 @@ onMounted(async () => {
             <NInput v-model:value="form.passcode" placeholder="分享链接未带 pwd 时使用此提取码" />
           </NFormItem>
           <NFormItem label="Cookie">
-            <div class="storage-token-row storage-token-row--stack">
-              <NInput
-                v-model:value="form.cookie"
-                type="textarea"
-                :autosize="{ minRows: 4, maxRows: 8 }"
-                placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
-              />
-              <NButton size="small" secondary class="storage-token-get" @click="openQrcode"> 扫码获取 </NButton>
-            </div>
+            <template #label>
+              <div class="storage-cookie-label">
+                <span>Cookie</span>
+                <NButton size="tiny" secondary @click="openQrcode">扫码获取</NButton>
+              </div>
+            </template>
+            <NInput
+              v-model:value="form.cookie"
+              type="textarea"
+              :autosize="{ minRows: 4, maxRows: 8 }"
+              placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
+            />
           </NFormItem>
           <p class="storage-quark-tip">
-            分享浏览不需要登录，但<strong>下载需要 Cookie</strong>（夸克分享文件需登录态才能拿下载地址）。
-            获取方式：浏览器登录 <code>pan.quark.cn</code> → F12 → Application → Cookies → 全选复制；也可用<strong
-              >夸克 App 扫码</strong
-            >自动获取。 分享链接若带提取码（<code>?pwd=xxxx</code>）请一并粘贴。
+            分享浏览无需登录，但<strong>下载需要 Cookie</strong>。浏览器登录 <code>pan.quark.cn</code> → F12 →
+            Application → Cookies 全选复制，或点右上角「扫码获取」用夸克 App 自动获取。
           </p>
         </template>
 
@@ -664,12 +666,15 @@ onMounted(async () => {
   gap: 8px;
   width: 100%;
 }
-.storage-token-row--stack {
-  flex-direction: column;
+.storage-cookie-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
 }
 .storage-token-get {
   flex: none;
-  align-self: flex-end;
 }
 .qr-box {
   display: flex;
