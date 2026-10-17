@@ -476,15 +476,18 @@ onMounted(async () => {
 
         <template v-if="isBaidu">
           <NFormItem label="refresh_token">
-            <div class="storage-token-row">
-              <NInput
-                v-model:value="form.refresh_token"
-                type="textarea"
-                :autosize="{ minRows: 2, maxRows: 4 }"
-                placeholder="粘贴 refresh_token（以 122. 开头）"
-              />
-              <NButton size="small" secondary class="storage-token-get" @click="openAuthorize"> 获取 </NButton>
-            </div>
+            <template #label>
+              <div class="storage-cookie-label">
+                <span>refresh_token</span>
+                <NButton size="small" type="primary" @click="openAuthorize">扫码获取</NButton>
+              </div>
+            </template>
+            <NInput
+              v-model:value="form.refresh_token"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="粘贴 refresh_token（以 122. 开头）"
+            />
           </NFormItem>
           <NSpace :size="12">
             <NFormItem label="client_id" class="storage-flex-item">
@@ -504,7 +507,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="tiny" secondary @click="openQrcode">扫码获取</NButton>
+                <NButton size="small" type="primary" @click="openQrcode">扫码获取</NButton>
               </div>
             </template>
             <NInput
@@ -534,7 +537,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="tiny" secondary @click="openQrcode">扫码获取</NButton>
+                <NButton size="small" type="primary" @click="openQrcode">扫码获取</NButton>
               </div>
             </template>
             <NInput
@@ -660,12 +663,6 @@ onMounted(async () => {
   width: 140px;
   white-space: nowrap;
 }
-.storage-token-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  width: 100%;
-}
 .storage-cookie-label {
   display: flex;
   align-items: center;
@@ -673,8 +670,9 @@ onMounted(async () => {
   gap: 8px;
   width: 100%;
 }
-.storage-token-get {
-  flex: none;
+/* Let the #label slot stretch across the dialog so 扫码获取 sits flush right. */
+.storage-dialog :deep(.n-form-item-label) {
+  width: 100%;
 }
 .qr-box {
   display: flex;
