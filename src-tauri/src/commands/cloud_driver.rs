@@ -62,17 +62,17 @@ async fn m115_ua() -> String {
                 .timeout(std::time::Duration::from_secs(5))
                 .build();
             let ver = match client {
-                Ok(c) => c
-                    .get(M115_APP_VERSION_URL)
-                    .send()
-                    .await
-                    .ok()
-                    .and_then(|r| r.json::<serde_json::Value>().await.ok())
-                    .and_then(|j| j["data"]["app_versions"].as_array().cloned())
-                    .and_then(|arr| {
-                        arr.into_iter().find(|v| v["app_name"].as_str() == Some("win"))
-                    })
-                    .and_then(|v| v["version"].as_str().map(str::to_string)),
+                Ok(c) => {
+                    let json = match c.get(M115_APP_VERSION_URL).send().await {
+                        Ok(resp) => resp.json::<serde_json::Value>().await.ok(),
+                        Err(_) => None,
+                    };
+                    json.and_then(|j| j["data"]["app_versions"].as_array().cloned())
+                        .and_then(|arr| {
+                            arr.into_iter().find(|v| v["app_name"].as_str() == Some("win"))
+                        })
+                        .and_then(|v| v["version"].as_str().map(str::to_string))
+                }
                 Err(_) => None,
             };
             ver.unwrap_or_else(|| M115_UA_FALLBACK.to_string())
