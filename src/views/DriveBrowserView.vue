@@ -76,6 +76,14 @@ const shareLabel = computed(() => {
   return code || '分享'
 })
 
+/** Which family the transient share belongs to (drives the dialog wording). */
+const shareKind = computed(() => {
+  const s = storages.value.find((x) => x.id === shareSourceId.value)
+  const d = s?.driver ?? 'quark_share'
+  return d === 'm115' || d === 'm115_share' ? 'm115' : d
+})
+const isM115Share = computed(() => shareKind.value === 'm115')
+
 const isRoot = computed(() => activeStorage.value === null && shareSession.value === null)
 const currentPath = computed(() => {
   if (isRoot.value) return '/'
@@ -190,7 +198,7 @@ function enterStorage(s: CloudStorage) {
   try {
     const addition = JSON.parse(s.addition) as { root_path?: string; root_id?: string }
     if (s.driver === 'quark' || s.driver === 'm115') root = addition.root_id?.trim() || '0'
-    else if (s.driver === 'quark_share') root = '0'
+    else if (s.driver === 'm115_share' || s.driver === 'quark_share') root = '0'
     else root = addition.root_path?.trim() || '/'
   } catch {
     // keep driver default above
@@ -329,7 +337,7 @@ function openShareDialog(s: CloudStorage) {
 async function confirmShare() {
   const url = shareForm.value.shareUrl.trim()
   if (!url) {
-    message.warning('请填写夸克分享地址')
+    message.warning(isM115Share.value ? '请填写 115 分享地址' : '请填写夸克分享地址')
     return
   }
   shareSaving.value = true
@@ -484,7 +492,12 @@ onMounted(async () => {
               <td class="drive-col-time drive-muted">{{ fmtDbTime(s.modified) }}</td>
               <td class="drive-col-action" @click.stop>
                 <NButton
-                  v-if="s.driver === 'quark' || s.driver === 'quark_share'"
+                  v-if="
+                    s.driver === 'quark' ||
+                    s.driver === 'quark_share' ||
+                    s.driver === 'm115' ||
+                    s.driver === 'm115_share'
+                  "
                   size="tiny"
                   secondary
                   @click="openShareDialog(s)"
@@ -534,19 +547,25 @@ onMounted(async () => {
     <NModal
       v-model:show="shareDialog"
       preset="dialog"
-      title="提取夸克分享"
+      :title="isM115Share ? '提取 115 分享' : '提取夸克分享'"
       positive-text="进入"
       negative-text="取消"
       :loading="shareSaving"
       @positive-click="confirmShare"
     >
-      <div class="share-dialog-tip">直接浏览该分享并下载，无需添加存储；下载复用所选存储的 Cookie。</div>
+      <div class="share-dialog-tip">
+        直接浏览该分享并下载，无需添加存储；下载复用所选存储的 Cookie。
+        <template v-if="isM115Share">115 分享下载需要账号 Cookie。</template>
+      </div>
       <NForm label-placement="top">
         <NFormItem label="分享地址">
-          <NInput v-model:value="shareForm.shareUrl" placeholder="https://pan.quark.cn/s/xxxx" />
+          <NInput
+            v-model:value="shareForm.shareUrl"
+            :placeholder="isM115Share ? 'https://115.com/s/xxxx?password=提取码' : 'https://pan.quark.cn/s/xxxx'"
+          />
         </NFormItem>
-        <NFormItem label="提取码（非必填）">
-          <NInput v-model:value="shareForm.passcode" placeholder="有提取码则填写" />
+        <NFormItem :label="isM115Share ? '提取码（非必填）' : '提取码（非必填）'">
+          <NInput v-model:value="shareForm.passcode" placeholder="有提取码则填写（分享地址已带 password 时可不填）" />
         </NFormItem>
       </NForm>
     </NModal>

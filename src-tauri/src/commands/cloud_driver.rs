@@ -36,6 +36,11 @@ const QUARK_MAX_ATTEMPTS: usize = 2;
 const M115_FILE_LIST_URL: &str = "https://webapi.115.com/files";
 const M115_DOWN_URL: &str = "https://proapi.115.com/app/chrome/downurl";
 const M115_APP_VERSION_URL: &str = "https://appversion.115.com/1/web/1.0/api/chrome";
+/// 115 share driver endpoints (alist `drivers/115_share` + SDK share.go):
+/// listing a share is public (no cookie), downloading uses the app downurl
+/// API with an m115-encrypted payload and requires the account cookie.
+const M115_SHARE_SNAP_URL: &str = "https://115cdn.com/webapi/share/snap";
+const M115_SHARE_DOWN_URL: &str = "https://proapi.115.com/app/share/downurl";
 /// Fallback 115Browser version, refreshed from appversion.115.com at runtime
 /// (alist `appver.go`): the CDN rejects stale client versions with 403.
 const M115_UA_FALLBACK: &str = "27.0.5.7";
@@ -178,6 +183,71 @@ impl M115Addition {
     }
 }
 
+/// 115 share driver addition (alist `drivers/115_share`). Listing a share is
+/// public (no cookie); the download API requires the account cookie, so it is
+/// optional in the form but needed before downloading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct M115ShareAddition {
+    /// Full share URL, e.g. `https://115.com/s/<code>?password=<pwd>`.
+    pub share_url: String,
+    /// Share code parsed from the URL (e.g. `swzc6w236gr`).
+    #[serde(default)]
+    pub share_code: String,
+    /// Optional receive code (`password=`), empty for public shares.
+    #[serde(default)]
+    pub receive_code: String,
+    /// Optional 115 account cookie (UID/CID/SEID[/KID]); required to download.
+    #[serde(default)]
+    pub cookie: String,
+}
+
+impl M115ShareAddition {
+    pub fn parse(json: &str) -> Result<Self, AppError> {
+        serde_json::from_str(json)
+            .map_err(|e| AppError::CloudDrive(format!("解析驱动配置失败: {e}")))
+    }
+    fn to_json(&self) -> Result<String, AppError> {
+        serde_json::to_string(self)
+            .map_err(|e| AppError::CloudDrive(format!("序列化驱动配置失败: {e}")))
+    }
+    /// Extract share_code / receive_code from the raw share URL. Accepts
+    /// `https://115.com/s/<code>?password=<pwd>` and `https://115cdn.com/s/<code>?password=<pwd>&`.
+    fn parse_share_url(url: &str) -> (String, String) {
+        let (code, pwd) = match url.find("/s/") {
+            Some(idx) => {
+                let rest = &url[idx + 3..];
+                let code = rest
+                    .split(['?', '#', '/'])
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let pwd = url
+                    .split('?')
+                    .nth(1)
+                    .unwrap_or("")
+                    .split('&')
+                    .find_map(|kv| {
+                        let mut it = kv.splitn(2, '=');
+                        match (it.next(), it.next()) {
+                            (Some(k), Some(v)) if k.eq_ignore_ascii_case("password") => Some(v.to_string()),
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or_default();
+                (code, pwd)
+            }
+            None => (String::new(), String::new()),
+        };
+        (code, pwd)
+    }
+    fn referer(&self) -> String {
+        format!(
+            "https://115cdn.com/s/{}?password={}&",
+            self.share_code, self.receive_code
+        )
+    }
+}
+
 /// Best-effort HTML unescape for names returned by Quark.
 fn html_unescape(s: &str) -> String {
     s.replace("&amp;", "&")
@@ -194,6 +264,7 @@ pub enum CloudDriver {
     Quark(QuarkDriver),
     QuarkShare(QuarkShareDriver),
     M115(M115Driver),
+    M115Share(M115ShareDriver),
 }
 
 impl CloudDriver {
@@ -215,6 +286,17 @@ impl CloudDriver {
                 id: storage.id,
                 addition: M115Addition::parse(&storage.addition)?,
             })),
+            "m115_share" => {
+                let mut addition = M115ShareAddition::parse(&storage.addition)?;
+                if addition.share_code.is_empty() {
+                    (addition.share_code, addition.receive_code) =
+                        M115ShareAddition::parse_share_url(&addition.share_url);
+                }
+                Ok(CloudDriver::M115Share(M115ShareDriver {
+                    id: storage.id,
+                    addition,
+                }))
+            }
             other => Err(AppError::CloudDrive(format!(
                 "不支持的驱动类型：{other}"
             ))),
@@ -227,12 +309,13 @@ impl CloudDriver {
             CloudDriver::Quark(_) => "quark",
             CloudDriver::QuarkShare(_) => "quark_share",
             CloudDriver::M115(_) => "m115",
+            CloudDriver::M115Share(_) => "m115_share",
         }
     }
 
     /// List the children of `path`. For Baidu this is an absolute drive path
-    /// (including the mount root); for Quark/QuarkShare/M115 it is a directory
-    /// id (`0` = root).
+    /// (including the mount root); for Quark/QuarkShare/M115/M115Share it is a
+    /// directory id (`0`/empty = root).
     pub async fn list(
         &mut self,
         db: &Database,
@@ -246,6 +329,7 @@ impl CloudDriver {
             CloudDriver::Quark(d) => d.list(db, path).await,
             CloudDriver::QuarkShare(d) => d.list(Some(db), path).await,
             CloudDriver::M115(d) => d.list(db, path).await,
+            CloudDriver::M115Share(d) => d.list(db, path).await,
         };
         let status = match &result {
             Ok(_) => "正常".to_string(),
@@ -262,6 +346,9 @@ impl CloudDriver {
                 d.set_status(Some(db), &status).await;
             }
             CloudDriver::M115(d) => {
+                d.set_status(db, &status).await;
+            }
+            CloudDriver::M115Share(d) => {
                 d.set_status(db, &status).await;
             }
         }
@@ -1089,6 +1176,246 @@ impl M115Driver {
     }
 }
 
+// ============================ 115 share driver ============================
+
+/// 115 share driver (alist `drivers/115_share`). Listing a share is public:
+/// `GET https://115cdn.com/webapi/share/snap` with only a Referer built from
+/// the share code / receive code. Downloading requires the account cookie and
+/// uses the new app API (`POST proapi.115.com/app/share/downurl`) with an
+/// m115-encrypted payload; the legacy web downurl endpoint rejects third-party
+/// clients since 2026-09 (verified live against a real share).
+pub struct M115ShareDriver {
+    id: i64,
+    addition: M115ShareAddition,
+}
+
+impl M115ShareDriver {
+    fn http_client(ua: &str) -> Result<reqwest::Client, AppError> {
+        reqwest::Client::builder()
+            .user_agent(ua)
+            .build()
+            .map_err(|e| AppError::CloudDrive(format!("创建 115 分享 HTTP 客户端失败: {e}")))
+    }
+
+    async fn set_status(&self, db: &Database, status: &str) -> Result<(), AppError> {
+        db.set_storage_status(self.id, status).await
+    }
+
+    async fn persist(&self, db: Option<&Database>) -> Result<(), AppError> {
+        let Some(db) = db else { return Ok(()) };
+        db.update_storage_addition(self.id, &self.addition.to_json()?)
+            .await?;
+        Ok(())
+    }
+
+    /// Parse 115 share update time (unix seconds).
+    fn parse_mtime(t: &str) -> u64 {
+        t.parse::<i64>().ok().map(|s| s.max(0) as u64).unwrap_or(0)
+    }
+
+    async fn list(
+        &mut self,
+        _db: &Database,
+        cid: &str,
+    ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
+        const MAX_PAGES: usize = 100;
+        const PAGE_SIZE: i64 = 200;
+        let ua = m115_ua().await;
+        let mut out = Vec::new();
+        let mut offset: i64 = 0;
+        for _ in 0..MAX_PAGES {
+            let client = Self::http_client(&ua)?;
+            let url = reqwest::Url::parse_with_params(
+                M115_SHARE_SNAP_URL,
+                &[
+                    ("share_code", self.addition.share_code.as_str()),
+                    ("receive_code", self.addition.receive_code.as_str()),
+                    ("cid", cid),
+                    ("limit", &PAGE_SIZE.to_string()),
+                    ("asc", "0"),
+                    ("offset", &offset.to_string()),
+                    ("format", "json"),
+                ],
+            )
+            .map_err(|e| AppError::CloudDrive(format!("构造 115 分享列表地址失败: {e}")))?;
+            let resp = client
+                .get(url)
+                .header("Referer", self.addition.referer())
+                .header("Content-Type", "application/json;charset=UTF-8")
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求 115 分享列表失败: {e}")))?;
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("读取 115 分享列表响应失败: {e}")))?;
+            let json: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| AppError::CloudDrive(format!("解析 115 分享列表失败: {e}")))?;
+            if !status.is_success() || !json["state"].as_bool().unwrap_or(false) {
+                let msg = json["error"]
+                    .as_str()
+                    .or_else(|| json["message"].as_str())
+                    .unwrap_or("未知错误");
+                return Err(AppError::CloudDrive(format!(
+                    "115 分享返回错误（HTTP {status}）：{msg}"
+                )));
+            }
+            let list = json["data"]["list"].as_array().cloned().unwrap_or_default();
+            for item in &list {
+                let name = item["n"].as_str().unwrap_or("").to_string();
+                let fid = item["fid"].as_str().unwrap_or("").to_string();
+                let is_file = item["fc"].as_i64().unwrap_or(0) == 1;
+                let cid_val = item["cid"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| item["cid"].as_u64().map(|n| n.to_string()))
+                    .unwrap_or_default();
+                let size = item["s"]
+                    .as_str()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .or_else(|| item["s"].as_u64())
+                    .unwrap_or(0);
+                let id = if is_file { fid.clone() } else { cid_val.clone() };
+                out.push(crate::commands::CloudDriveFile {
+                    fs_id: 0,
+                    name,
+                    size,
+                    path: id.clone(),
+                    isdir: !is_file,
+                    mtime: Self::parse_mtime(item["t"].as_str().unwrap_or("")),
+                    category: 0,
+                    id,
+                    rel_path: String::new(),
+                    pdir_fid: String::new(),
+                    share_fid_token: String::new(),
+                    pickcode: String::new(),
+                });
+            }
+            let count = json["data"]["count"].as_i64().unwrap_or(0);
+            offset += PAGE_SIZE;
+            if offset >= count {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Fetch download URLs: m115-encrypt (share_code/receive_code/file_id),
+    /// POST the app downurl, decrypt the response. Download headers carry the
+    /// account cookie + any Set-Cookie issued by the downurl response (the CDN
+    /// rejects requests without it, same as the 115 drive).
+    pub async fn get_dlinks(
+        &mut self,
+        _db: &Database,
+        files: &[crate::commands::CloudDriveFile],
+    ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
+        if self.addition.cookie.trim().is_empty() {
+            return Err(AppError::CloudDrive(
+                "115 分享下载需要账号 cookie，请在存储配置中填写".into(),
+            ));
+        }
+        let mut result = Vec::new();
+        let ua = m115_ua().await;
+        for file in files {
+            if file.isdir {
+                continue;
+            }
+            let client = Self::http_client(&ua)?;
+            let key = crate::commands::m115_crypto::generate_key();
+            let body = serde_json::json!({
+                "share_code": self.addition.share_code,
+                "receive_code": self.addition.receive_code,
+                "file_id": file.id,
+            })
+            .to_string();
+            let data = crate::commands::m115_crypto::encode(body.as_bytes(), &key);
+            let url = format!("{M115_SHARE_DOWN_URL}?t={}", chrono::Utc::now().timestamp());
+            let resp = client
+                .post(&url)
+                .header("Cookie", &self.addition.cookie)
+                .header("Accept", "application/json;charset=UTF-8")
+                .form(&[("data", data.as_str())])
+                .header("Content-Type", "application/json;charset=UTF-8")
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求 115 分享下载地址失败: {e}")))?;
+            let status = resp.status();
+            let set_cookies: Vec<String> = resp
+                .headers()
+                .get_all(reqwest::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(str::to_string))
+                .filter(|s| !s.is_empty())
+                .collect();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("读取 115 分享下载响应失败: {e}")))?;
+            let json: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| AppError::CloudDrive(format!("解析 115 分享下载响应失败: {e}")))?;
+            let state = json["state"].as_bool().unwrap_or(false);
+            if !status.is_success() || !state {
+                let msg = json["error"].as_str().unwrap_or("未知错误");
+                if msg.contains("登录") || msg.contains("login") {
+                    return Err(AppError::CloudDrive(format!(
+                        "115 分享下载需要有效账号 cookie：{msg}"
+                    )));
+                }
+                return Err(AppError::CloudDrive(format!(
+                    "获取 115 分享下载地址失败（HTTP {status}）：{msg}"
+                )));
+            }
+            let encoded = json["data"]
+                .as_str()
+                .ok_or_else(|| AppError::CloudDrive("115 分享下载响应缺少 data".into()))?;
+            let plain = crate::commands::m115_crypto::decode(encoded, &key)
+                .map_err(|e| AppError::CloudDrive(format!("解密 115 分享下载响应失败: {e}")))?;
+            let plain_json: serde_json::Value = serde_json::from_slice(&plain)
+                .map_err(|e| AppError::CloudDrive(format!("解析 115 分享下载数据失败: {e}")))?;
+            let dlink = plain_json["url"]["url"]
+                .as_str()
+                .ok_or_else(|| {
+                    let sample = String::from_utf8_lossy(&plain);
+                    log::warn!("115 分享 downurl 响应结构异常: {}", &sample[..sample.len().min(400)]);
+                    AppError::CloudDrive(format!("115 分享未返回 {} 的下载地址", file.name))
+                })?
+                .to_string();
+            let mut cookie = self.addition.cookie.clone();
+            for c in &set_cookies {
+                cookie.push_str("; ");
+                cookie.push_str(c);
+            }
+            let headers = vec![
+                format!("User-Agent: {ua}"),
+                format!("Cookie: {cookie}"),
+            ];
+            result.push((file.clone(), dlink, headers));
+        }
+        if result.is_empty() {
+            return Err(AppError::CloudDrive("未能获取任何 115 分享文件的下载地址".into()));
+        }
+        Ok(result)
+    }
+
+    /// Build an ephemeral share driver for the "提取分享" flow: the share code
+    /// is parsed from the URL, `receive_code` is used only when the URL itself
+    /// carries no `password=`, and the download cookie is borrowed from the
+    /// source storage.
+    pub fn transient(share_url: String, receive_code: String, cookie: String) -> Self {
+        let (share_code, rc) = M115ShareAddition::parse_share_url(&share_url);
+        Self {
+            id: 0,
+            addition: M115ShareAddition {
+                share_url: share_url.clone(),
+                share_code,
+                receive_code: if rc.is_empty() { receive_code } else { rc },
+                cookie,
+            },
+        }
+    }
+}
+
 // ============================== Quark share driver ==============================
 
 /// Quark share driver addition: a shared-folder URL plus the web-session
@@ -1536,6 +1863,18 @@ fn storage_quark_cookie(storage: &CloudStorage) -> Result<String, AppError> {
     }
 }
 
+/// The cookie of a 115-family storage (`m115` / `m115_share`), reused by the
+/// transient "提取分享" flow for download auth.
+fn storage_115_cookie(storage: &CloudStorage) -> Result<String, AppError> {
+    match storage.driver.as_str() {
+        "m115" => Ok(M115Addition::parse(&storage.addition)?.cookie),
+        "m115_share" => Ok(M115ShareAddition::parse(&storage.addition)?.cookie),
+        other => Err(AppError::CloudDrive(format!(
+            "「提取分享」仅支持 115 驱动，当前存储为 {other}"
+        ))),
+    }
+}
+
 /// Submit resolved links to aria2 and summarize the outcome.
 async fn submit_links(
     app: &AppHandle,
@@ -1621,6 +1960,7 @@ pub async fn cloud_drive_storage_download(
         CloudDriver::Quark(d) => d.get_dlinks(&db.0, &files).await?,
         CloudDriver::QuarkShare(d) => d.get_dlinks(Some(&db.0), &files).await?,
         CloudDriver::M115(d) => d.get_dlinks(&db.0, &files).await?,
+        CloudDriver::M115Share(d) => d.get_dlinks(&db.0, &files).await?,
     };
 
     let default_dir: Option<String> = app
@@ -1697,9 +2037,21 @@ pub async fn cloud_drive_share_list(
     if storage.disabled {
         return Err(AppError::CloudDrive("该存储已被禁用".into()));
     }
-    let cookie = storage_quark_cookie(&storage)?;
-    let mut driver = QuarkShareDriver::transient(share_url, passcode, cookie);
-    driver.list(None, &path).await
+    match storage.driver.as_str() {
+        "quark_share" => {
+            let cookie = storage_quark_cookie(&storage)?;
+            let mut driver = QuarkShareDriver::transient(share_url, passcode, cookie);
+            driver.list(None, &path).await
+        }
+        "m115" | "m115_share" => {
+            let cookie = storage_115_cookie(&storage)?;
+            let mut driver = M115ShareDriver::transient(share_url, passcode, cookie);
+            driver.list(&db.0, &path).await
+        }
+        other => Err(AppError::CloudDrive(format!(
+            "「提取分享」当前仅支持夸克分享与 115 分享存储，当前存储为 {other}"
+        ))),
+    }
 }
 
 /// Download checked files from a transient share (提取分享).
@@ -1723,13 +2075,31 @@ pub async fn cloud_drive_share_download(
     if storage.disabled {
         return Err(AppError::CloudDrive("该存储已被禁用".into()));
     }
-    let cookie = storage_quark_cookie(&storage)?;
-    let mut driver = QuarkShareDriver::transient(share_url, passcode, cookie);
-    let files = expand_share_folders(&mut driver, files).await?;
-    if files.is_empty() {
-        return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
-    }
-    let links = driver.get_dlinks(None, &files).await?;
+    let links = match storage.driver.as_str() {
+        "quark_share" => {
+            let cookie = storage_quark_cookie(&storage)?;
+            let mut driver = QuarkShareDriver::transient(share_url, passcode, cookie);
+            let files = expand_share_folders(&mut driver, files).await?;
+            if files.is_empty() {
+                return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
+            }
+            driver.get_dlinks(None, &files).await?
+        }
+        "m115" | "m115_share" => {
+            let cookie = storage_115_cookie(&storage)?;
+            let mut driver = M115ShareDriver::transient(share_url, passcode, cookie);
+            let files = expand_m115_share_folders(&mut driver, &db.0, files).await?;
+            if files.is_empty() {
+                return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
+            }
+            driver.get_dlinks(&db.0, &files).await?
+        }
+        other => {
+            return Err(AppError::CloudDrive(format!(
+                "「提取分享」当前仅支持夸克分享与 115 分享存储，当前存储为 {other}"
+            )));
+        }
+    };
     let default_dir: Option<String> = app
         .store("config.json")
         .ok()
@@ -1743,6 +2113,45 @@ pub async fn cloud_drive_share_download(
         })
         .filter(|dir| !dir.is_empty());
     Ok(submit_links(&app, &links, default_dir.as_deref()).await)
+}
+
+/// Expand selected folders of a transient 115 share into their contained
+/// files (same BFS as the quark variant, `list` takes a db handle).
+async fn expand_m115_share_folders(
+    driver: &mut M115ShareDriver,
+    db: &Database,
+    files: Vec<CloudDriveFile>,
+) -> Result<Vec<CloudDriveFile>, AppError> {
+    let mut result: Vec<CloudDriveFile> = Vec::new();
+    let mut queue: Vec<CloudDriveFile> = files;
+    for f in queue.iter_mut() {
+        f.rel_path = if f.isdir { f.name.clone() } else { String::new() };
+    }
+    let mut requests = 0usize;
+    while let Some(item) = queue.pop() {
+        if !item.isdir {
+            result.push(item);
+            continue;
+        }
+        let children = driver.list(db, &item.path).await?;
+        requests += 1;
+        if requests % 50 == 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        for mut child in children {
+            child.rel_path = if child.isdir {
+                if item.rel_path.is_empty() {
+                    child.name.clone()
+                } else {
+                    format!("{}/{}", item.rel_path, child.name)
+                }
+            } else {
+                item.rel_path.clone()
+            };
+            queue.push(child);
+        }
+    }
+    Ok(result)
 }
 
 

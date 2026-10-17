@@ -81,6 +81,7 @@ const DRIVERS = [
   { label: '夸克网盘', value: 'quark' },
   { label: '夸克分享', value: 'quark_share' },
   { label: '115 网盘', value: 'm115' },
+  { label: '115 分享', value: 'm115_share' },
 ] as const
 
 const message = useMessage()
@@ -101,7 +102,9 @@ const form = ref<{
   cookie: string
   root_id: string
   share_url: string
+  share_code: string
   passcode: string
+  receive_code: string
   remark: string
 }>({
   mount_path: '',
@@ -113,7 +116,9 @@ const form = ref<{
   cookie: '',
   root_id: '0',
   share_url: '',
+  share_code: '',
   passcode: '',
+  receive_code: '',
   remark: '',
 })
 
@@ -122,6 +127,7 @@ const isBaidu = computed(() => form.value.driver === 'baidu_netdisk')
 const isQuark = computed(() => form.value.driver === 'quark')
 const isQuarkShare = computed(() => form.value.driver === 'quark_share')
 const isM115 = computed(() => form.value.driver === 'm115')
+const isM115Share = computed(() => form.value.driver === 'm115_share')
 
 function resetForm() {
   editingId.value = null
@@ -135,7 +141,9 @@ function resetForm() {
     cookie: '',
     root_id: '0',
     share_url: '',
+    share_code: '',
     passcode: '',
+    receive_code: '',
     remark: '',
   }
 }
@@ -163,7 +171,9 @@ function openEdit(s: CloudStorage) {
     cookie: (addition.cookie as string) ?? '',
     root_id: (addition.root_id as string) ?? '0',
     share_url: (addition.share_url as string) ?? '',
+    share_code: (addition.share_code as string) ?? '',
     passcode: (addition.passcode as string) ?? '',
+    receive_code: (addition.receive_code as string) ?? '',
     remark: s.remark,
   }
   showDialog.value = true
@@ -178,6 +188,7 @@ function onDriverChange() {
   form.value.root_id = '0'
   form.value.share_url = ''
   form.value.passcode = ''
+  form.value.receive_code = ''
 }
 
 // --- qrcode login (扫码获取 Cookie): quark / 115 ---
@@ -308,6 +319,14 @@ function buildAddition(): Record<string, unknown> {
       root_id: form.value.root_id.trim() || '0',
     }
   }
+  if (form.value.driver === 'm115_share') {
+    return {
+      share_url: form.value.share_url.trim(),
+      share_code: form.value.share_code.trim(),
+      receive_code: form.value.receive_code.trim(),
+      cookie: form.value.cookie.trim(),
+    }
+  }
   return {
     refresh_token: form.value.refresh_token.trim(),
     root_path: form.value.root_path.trim() || '/',
@@ -342,6 +361,12 @@ async function save() {
   if (form.value.driver === 'm115' && !form.value.cookie.trim()) {
     message.warning('请填写 115 网页版 Cookie（登录 115.com 后从浏览器复制）')
     return
+  }
+  if (form.value.driver === 'm115_share') {
+    if (!form.value.share_url.trim() && !form.value.share_code.trim()) {
+      message.warning('请填写 115 分享地址（https://115.com/s/xxxx 或 115cdn.com/s/xxxx）')
+      return
+    }
   }
   saving.value = true
   try {
@@ -462,7 +487,9 @@ onMounted(async () => {
                         ? '夸克分享'
                         : s.driver === 'm115'
                           ? '115 网盘'
-                          : s.driver
+                          : s.driver === 'm115_share'
+                            ? '115 分享'
+                            : s.driver
                 }}
               </td>
               <td>
@@ -627,6 +654,37 @@ onMounted(async () => {
           <NFormItem label="root_id（挂载根目录 cid）">
             <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
           </NFormItem>
+        </template>
+
+        <template v-else-if="isM115Share">
+          <NFormItem label="分享地址">
+            <NInput
+              v-model:value="form.share_url"
+              placeholder="https://115.com/s/xxxx?password=提取码（分享码自动解析）"
+            />
+          </NFormItem>
+          <NFormItem label="提取码（非必填）">
+            <NInput v-model:value="form.receive_code" placeholder="分享链接未带 password 时使用此提取码" />
+          </NFormItem>
+          <NFormItem label="Cookie">
+            <template #label>
+              <div class="storage-cookie-label">
+                <span>Cookie</span>
+                <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
+              </div>
+            </template>
+            <NInput
+              v-model:value="form.cookie"
+              type="textarea"
+              :autosize="{ minRows: 4, maxRows: 8 }"
+              placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
+            />
+          </NFormItem>
+          <p class="storage-quark-tip">
+            分享浏览无需登录，但<strong>下载需要 Cookie</strong>。浏览器登录 <code>115.com</code> → F12 → Application →
+            Cookies 全选复制（形如 <code>UID=xxx; CID=yyy; SEID=zzz</code>），或点右上角「扫码获取」用 115 App
+            自动获取。
+          </p>
         </template>
 
         <NFormItem label="备注">
