@@ -1490,19 +1490,12 @@ async fn submit_links(
     let mut added = 0usize;
     let mut failed = 0usize;
     for (file, dlink, headers) in links {
-        // 115 CDN caps concurrent TCP connections per URL (~2 verified live:
-        // 2 of 4 parallel Range requests returned 403), so a high split only
-        // produces rejected pieces. Keep 115 low; other drive CDNs accept
-        // more parallelism. Single-connection throughput on 115 fluctuates
-        // (9.6~28MB/s) and is the real speed limit, not connection count.
-        let is_115 = dlink.contains("115cdn.net") || dlink.contains(".115.com");
-        let split = if is_115 { 4 } else { 32 };
+        // Keep per-task options minimal: aria2's default split (5) and the
+        // engine/global connection preference apply, as before. Drive CDNs
+        // (115 especially) reject or don't benefit from aggressive slicing.
         let mut options = serde_json::json!({
             "header": headers,
             "out": file.name,
-            "split": split,
-            "max-connection-per-server": split,
-            "min-split-size": "1M",
         });
         if let Some(dir) = default_dir
             .and_then(|base| resolve_download_dir(base, &file.rel_path))
