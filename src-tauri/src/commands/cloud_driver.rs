@@ -796,7 +796,7 @@ impl M115Driver {
         for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
             if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(t, fmt) {
                 if let Some(offset) = chrono::FixedOffset::east_opt(8 * 3600) {
-                    if let Ok(dt) = dt.and_local_timezone(offset).single() {
+                    if let Some(dt) = dt.and_local_timezone(offset).single() {
                         return dt.timestamp().max(0) as u64;
                     }
                 }
