@@ -755,6 +755,7 @@ impl QuarkDriver {
                 let new_puus: Option<String> = resp
                     .headers()
                     .get_all(reqwest::header::SET_COOKIE)
+                    .into_iter()
                     .filter_map(|v| v.to_str().ok())
                     .find_map(|s| {
                         s.split(';')
@@ -1395,6 +1396,7 @@ impl QuarkShareDriver {
                     let new_puus: Option<String> = resp
                         .headers()
                         .get_all(reqwest::header::SET_COOKIE)
+                        .into_iter()
                         .filter_map(|v| v.to_str().ok())
                         .find_map(|s| {
                             s.split(';')
@@ -1430,7 +1432,7 @@ impl QuarkShareDriver {
                         };
                         self.addition.cookie = dl_cookie.clone();
                         if let Some(db) = db {
-                            let _ = self.persist(db).await;
+                            let _ = self.persist(Some(db)).await;
                         }
                     }
                     let headers = vec![
