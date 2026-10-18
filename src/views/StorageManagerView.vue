@@ -119,8 +119,8 @@ const form = ref<{
   mount_path: '',
   driver: 'baidu_netdisk',
   refresh_token: '',
-  client_id: DEFAULT_CLIENT_ID,
-  client_secret: DEFAULT_CLIENT_SECRET,
+  client_id: '',
+  client_secret: '',
   root_path: '/',
   root_folder_id: 'root',
   oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
@@ -188,8 +188,8 @@ function openEdit(s: CloudStorage) {
     mount_path: s.mount_path,
     driver: s.driver,
     refresh_token: (addition.refresh_token as string) ?? '',
-    client_id: (addition.client_id as string) ?? DEFAULT_CLIENT_ID,
-    client_secret: (addition.client_secret as string) ?? DEFAULT_CLIENT_SECRET,
+    client_id: (addition.client_id as string) ?? '',
+    client_secret: (addition.client_secret as string) ?? '',
     root_path: (addition.root_path as string) ?? '/',
     root_folder_id: (addition.root_folder_id as string) ?? 'root',
     oauth_token_url: (addition.oauth_token_url as string) ?? 'https://api.alistgo.com/alist/ali_open/token',
@@ -209,8 +209,8 @@ function openEdit(s: CloudStorage) {
 
 function onDriverChange() {
   // Re-apply driver defaults whenever the driver switches (or is first picked).
-  form.value.client_id = DEFAULT_CLIENT_ID
-  form.value.client_secret = DEFAULT_CLIENT_SECRET
+  form.value.client_id = ''
+  form.value.client_secret = ''
   form.value.root_path = '/'
   form.value.root_folder_id = 'root'
   form.value.oauth_token_url = 'https://api.alistgo.com/alist/ali_open/token'
