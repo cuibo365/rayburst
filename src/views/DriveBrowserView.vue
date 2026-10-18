@@ -28,6 +28,8 @@ interface DriveFile {
   category: number
   /** Universal string id: Baidu decimal fs_id; Quark 32-char hex fid. */
   id: string
+  /** Aliyun share: the drive hosting the share, carried back on download. */
+  drive_id?: string
 }
 
 interface CloudStorage {

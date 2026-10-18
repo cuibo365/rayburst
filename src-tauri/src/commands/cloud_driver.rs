@@ -581,6 +581,7 @@ impl BaiduDriver {
                     share_fid_token: String::new(),
                     pickcode: String::new(),
                 sha1: String::new(),
+                drive_id: String::new(),
                 });
             }
             if out.len() < (page + 1) * LIMIT {
@@ -846,6 +847,7 @@ impl QuarkDriver {
                         share_fid_token: String::new(),
                         pickcode: String::new(),
                     sha1: String::new(),
+                    drive_id: String::new(),
                     });
                 }
                 if out.is_empty() && skipped > 0 {
@@ -1110,6 +1112,7 @@ impl M115Driver {
                         share_fid_token: String::new(),
                         pickcode: String::new(),
                     sha1: String::new(),
+                    drive_id: String::new(),
                     });
                 } else {
                     let size = item["s"]
@@ -1131,6 +1134,7 @@ impl M115Driver {
                         share_fid_token: String::new(),
                         pickcode: item["pc"].as_str().unwrap_or("").to_string(),
                     sha1: String::new(),
+                    drive_id: String::new(),
                     });
                 }
             }
@@ -1358,6 +1362,7 @@ impl M115ShareDriver {
                     share_fid_token: String::new(),
                     pickcode: String::new(),
                 sha1: String::new(),
+                drive_id: String::new(),
                 });
             }
             let count = json["data"]["count"].as_i64().unwrap_or(0);
@@ -1715,6 +1720,7 @@ impl QuarkShareDriver {
                         share_fid_token: item["share_fid_token"].as_str().unwrap_or("").to_string(),
                         pickcode: String::new(),
                     sha1: String::new(),
+                    drive_id: String::new(),
                     });
                 }
                 let total = json["metadata"]["_total"].as_u64().unwrap_or(0);

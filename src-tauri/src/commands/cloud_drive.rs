@@ -48,6 +48,10 @@ pub struct CloudDriveFile {
     /// the 115 rapid-upload QuickID by the *To115 drivers. Empty otherwise.
     #[serde(default)]
     pub sha1: String,
+    /// Aliyun share driver: the drive hosting the share, learned from the
+    /// list response item and carried back in the share download request.
+    #[serde(default)]
+    pub drive_id: String,
 }
 
 #[derive(Debug, Serialize)]

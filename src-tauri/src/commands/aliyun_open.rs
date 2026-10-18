@@ -404,6 +404,7 @@ pub(crate) fn alist_file_to_drive(item: &serde_json::Value) -> crate::commands::
         share_fid_token: String::new(),
         pickcode: String::new(),
         sha1: item["content_hash"].as_str().unwrap_or("").to_string(),
+        drive_id: item["drive_id"].as_str().unwrap_or("").to_string(),
     }
 }
 

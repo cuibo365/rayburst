@@ -236,7 +236,20 @@ impl AliyunShare115Driver {
         let dir_id = self.addition.dir_id.trim().to_string();
         let user_key = self.addition.user_key.clone();
         let share_id = self.addition.share_id.clone();
-        let share_drive = share.addition.drive_id.clone();
+        // The share drive id is learned from listing; prefer the value the
+        // browsed files already carry, else learn it from one root listing.
+        let mut share_drive = share.addition.drive_id.clone();
+        if share_drive.is_empty() {
+            share_drive = files
+                .iter()
+                .find(|f| !f.drive_id.is_empty())
+                .map(|f| f.drive_id.clone())
+                .unwrap_or_default();
+        }
+        if share_drive.is_empty() {
+            let _ = share.list(db, "root").await?;
+            share_drive = share.addition.drive_id.clone();
+        }
         let own_drive = open.addition.drive_id.clone();
         let copy_dir = {
             let d = self.addition.open_copy_dir.trim();

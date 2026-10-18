@@ -261,7 +261,20 @@ impl AliyunShareDriver {
     ) -> Result<Vec<(crate::commands::CloudDriveFile, String, Vec<String>)>, AppError> {
         let access = self.ensure_access_token(db).await?;
         let share_token = self.ensure_share_token(db).await?;
-        let drive_id = self.addition.drive_id.clone();
+        let mut drive_id = self.addition.drive_id.clone();
+        if drive_id.is_empty() {
+            // Files browsed in the current session carry the share drive id;
+            // fall back to learning it from one root listing.
+            drive_id = files
+                .iter()
+                .find(|f| !f.drive_id.is_empty())
+                .map(|f| f.drive_id.clone())
+                .unwrap_or_default();
+        }
+        if drive_id.is_empty() {
+            self.list(db, "root").await?;
+            drive_id = self.addition.drive_id.clone();
+        }
         if drive_id.is_empty() {
             return Err(AppError::CloudDrive(
                 "阿里分享 drive_id 为空，请先浏览一次分享目录".into(),
