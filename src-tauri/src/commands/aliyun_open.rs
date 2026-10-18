@@ -18,6 +18,21 @@ use crate::database::Database;
 pub const ALIYUN_API: &str = "https://openapi.alipan.com";
 const ALIYUN_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
+/// Extract the `sub` claim from an Alipan JWT (alist `getSub`); used to guard
+/// refresh-token rotation against cross-account substitution.
+fn jwt_sub(token: &str) -> Option<String> {
+    use base64::Engine;
+    let seg = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(seg)
+        .ok()?;
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()?
+        .get("sub")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 pub fn default_root() -> String {
     "root".into()
 }
@@ -126,21 +141,45 @@ impl AliyunOpenDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 token 响应失败: {e}")))?;
         } else if !self.addition.oauth_token_url.is_empty() {
-            // hosted renew (alist-compatible): GET ?refresh_ui=<refresh_token>
-            let url = format!(
+            // Hosted renew (alist-compatible). alist first GETs
+            // `?refresh_ui=<token>&server_use=true&driver_txt=alicloud_qr`; alistgo
+            // now rejects that form with "Incorrect GrantType", so on any error
+            // body we fall back to POSTing the token to the same URL (alist
+            // `refreshTokenWithPost`): {client_id, client_secret, grant_type,
+            // refresh_token} — client_id/secret may be empty.
+            let get_url = format!(
                 "{}?refresh_ui={}&server_use=true&driver_txt=alicloud_qr",
                 self.addition.oauth_token_url,
                 urlencoding::encode(&self.addition.refresh_token)
             );
             let resp = client
-                .get(&url)
+                .get(&get_url)
                 .send()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
-            json = resp
+            let get_json: serde_json::Value = resp
                 .json()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
+            if get_json["access_token"].as_str().is_some() {
+                json = get_json;
+            } else {
+                let resp = client
+                    .post(self.addition.oauth_token_url.as_str())
+                    .json(&serde_json::json!({
+                        "client_id": self.addition.client_id,
+                        "client_secret": self.addition.client_secret,
+                        "grant_type": "refresh_token",
+                        "refresh_token": self.addition.refresh_token,
+                    }))
+                    .send()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
+                json = resp
+                    .json()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
+            }
         } else {
             return Err(AppError::CloudDrive(
                 "缺少阿里云盘 client_id/client_secret（或托管刷新地址），无法刷新 token".into(),
@@ -148,11 +187,25 @@ impl AliyunOpenDriver {
         }
         let access = json["access_token"]
             .as_str()
-            .ok_or_else(|| AppError::CloudDrive("阿里云盘刷新响应缺少 access_token".into()))?
+            .ok_or_else(|| {
+                let detail = json["text"]
+                    .as_str()
+                    .or_else(|| json["message"].as_str())
+                    .or_else(|| json["error"].as_str())
+                    .unwrap_or("响应中无 access_token 字段");
+                AppError::CloudDrive(format!("阿里云盘刷新响应缺少 access_token：{detail}"))
+            })?
             .to_string();
         if let Some(new_refresh) = json["refresh_token"].as_str() {
             if !new_refresh.is_empty() {
-                self.addition.refresh_token = new_refresh.to_string();
+                // alist guards the rotation with a JWT `sub` match: refuse a
+                // refresh_token that belongs to a different account.
+                match (jwt_sub(self.addition.refresh_token.as_str()), jwt_sub(new_refresh)) {
+                    (Some(cur), Some(new)) if cur == new => {
+                        self.addition.refresh_token = new_refresh.to_string();
+                    }
+                    _ => {}
+                }
             }
         }
         let expires_in = json["expires_in"].as_u64().unwrap_or(25 * 24 * 3600);
