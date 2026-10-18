@@ -343,6 +343,15 @@ async function openAuthorize() {
   }
 }
 
+/// Aliyun Drive refresh_token: jump to the alistgo official token page.
+async function openAliyunTokenPage() {
+  try {
+    await openUrl('https://alistgo.com/zh/tool/aliyundrive/request.html')
+  } catch (e) {
+    message.error(`打开授权页面失败：${String(e)}`)
+  }
+}
+
 function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'quark') {
     return {
@@ -826,6 +835,12 @@ onMounted(async () => {
 
         <template v-else-if="isAliyunDrive || isAliyunDrive115">
           <NFormItem label="阿里云盘 refresh_token">
+            <template #label>
+              <div class="storage-cookie-label">
+                <span>阿里云盘 refresh_token</span>
+                <NButton size="small" type="primary" @click="openAliyunTokenPage">扫码获取</NButton>
+              </div>
+            </template>
             <NInput
               v-model:value="form.refresh_token"
               type="textarea"
@@ -834,9 +849,9 @@ onMounted(async () => {
             />
           </NFormItem>
           <p class="storage-quark-tip">
-            <strong>获取方式：</strong>参考 alist「阿里云盘 Open」——在
-            <code>https://openapi.alipan.com/oauth/authorize</code> 授权后拿 refresh_token（也可用第三方托管 alist
-            扫码获取）。此处暂未内置扫码，请手动粘贴。
+            <strong>获取方式：</strong>点右上角「扫码获取」，在 alist 官方 token 页
+            （<code>alistgo.com/zh/tool/aliyundrive/request.html</code>）扫码授权后复制 refresh_token 粘贴至此；
+            也可参考 alist「阿里云盘 Open」在 <code>https://openapi.alipan.com/oauth/authorize</code> 授权获取。
           </p>
           <NSpace :size="12">
             <NFormItem label="client_id" class="storage-flex-item">
@@ -895,6 +910,12 @@ onMounted(async () => {
             <NInput v-model:value="form.passcode" placeholder="分享链接未带 pwd 时使用此提取码" />
           </NFormItem>
           <NFormItem label="阿里云盘 refresh_token">
+            <template #label>
+              <div class="storage-cookie-label">
+                <span>阿里云盘 refresh_token</span>
+                <NButton size="small" type="primary" @click="openAliyunTokenPage">扫码获取</NButton>
+              </div>
+            </template>
             <NInput
               v-model:value="form.refresh_token"
               type="textarea"
