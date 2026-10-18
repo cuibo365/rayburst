@@ -10,7 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::aliyun_open::{default_oauth_url, default_root, AliyunOpenAddition, AliyunOpenDriver};
+use crate::commands::aliyun_open::{
+    default_drive_type, default_oauth_url, default_root, AliyunOpenAddition, AliyunOpenDriver,
+};
 use crate::error::AppError;
 use crate::commands::m115_crypto;
 use crate::database::Database;
@@ -31,6 +33,9 @@ pub struct AliyunDrive115Addition {
     pub client_secret: String,
     #[serde(default = "default_root")]
     pub root_folder_id: String,
+    /// Alipan drive: default / resource / backup.
+    #[serde(default = "default_drive_type")]
+    pub drive_type: String,
     #[serde(default = "default_oauth_url")]
     pub oauth_token_url: String,
     /// 115 web-session cookie (UID/CID/SEID[/KID]).
@@ -117,6 +122,7 @@ impl AliyunDrive115Driver {
                 client_id: self.addition.client_id.clone(),
                 client_secret: self.addition.client_secret.clone(),
                 root_folder_id: self.addition.root_folder_id.clone(),
+                drive_type: self.addition.drive_type.clone(),
                 order_by: String::new(),
                 order_direction: String::new(),
                 oauth_token_url: self.addition.oauth_token_url.clone(),

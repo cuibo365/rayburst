@@ -41,6 +41,11 @@ pub fn default_oauth_url() -> String {
     "https://api.alistgo.com/alist/ali_open/token".into()
 }
 
+/// alist `DriveType` default (meta.go): `resource` = non-backup files.
+pub fn default_drive_type() -> String {
+    "resource".into()
+}
+
 /// Aliyun open addition (persisted in `cloud_storages.addition`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AliyunOpenAddition {
@@ -54,6 +59,10 @@ pub struct AliyunOpenAddition {
     /// Browse root; `root` = drive root.
     #[serde(default = "default_root")]
     pub root_folder_id: String,
+    /// Alipan drive: `default` / `resource` / `backup` (alist picks the
+    /// matching `{type}_drive_id` from getDriveInfo).
+    #[serde(default = "default_drive_type")]
+    pub drive_type: String,
     /// Sort key: name / size / updated_at / created_at (empty = default).
     #[serde(default)]
     pub order_by: String,
@@ -235,8 +244,12 @@ impl AliyunOpenDriver {
             .json()
             .await
             .map_err(|e| AppError::CloudDrive(format!("解析阿里云盘信息失败: {e}")))?;
-        let drive_id = json["default_drive_id"]
+        // alist picks `{drive_type}_drive_id` (default / resource / backup),
+        // falling back to the plain default when the account has no such drive.
+        let drive_type = self.addition.drive_type.trim();
+        let drive_id = json[format!("{drive_type}_drive_id")]
             .as_str()
+            .or_else(|| json["default_drive_id"].as_str())
             .or_else(|| json["drive_id"].as_str())
             .ok_or_else(|| {
                 AppError::CloudDrive(format!(

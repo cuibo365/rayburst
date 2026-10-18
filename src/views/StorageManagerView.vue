@@ -104,6 +104,7 @@ const form = ref<{
   client_secret: string
   root_path: string
   root_folder_id: string
+  drive_type: string
   oauth_token_url: string
   cookie: string
   root_id: string
@@ -123,6 +124,7 @@ const form = ref<{
   client_secret: '',
   root_path: '/',
   root_folder_id: 'root',
+  drive_type: 'resource',
   oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
   cookie: '',
   root_id: '0',
@@ -157,6 +159,7 @@ function resetForm() {
     client_secret: '',
     root_path: '/',
     root_folder_id: 'root',
+    drive_type: 'resource',
     oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
     cookie: '',
     root_id: '0',
@@ -198,6 +201,7 @@ function openEdit(s: CloudStorage) {
         : ((addition.client_secret as string) ?? ''),
     root_path: (addition.root_path as string) ?? '/',
     root_folder_id: (addition.root_folder_id as string) ?? 'root',
+    drive_type: (addition.drive_type as string) ?? 'resource',
     oauth_token_url: (addition.oauth_token_url as string) ?? 'https://api.alistgo.com/alist/ali_open/token',
     cookie: (addition.cookie as string) ?? '',
     root_id: (addition.root_id as string) ?? '0',
@@ -219,6 +223,7 @@ function onDriverChange() {
   form.value.client_secret = ''
   form.value.root_path = '/'
   form.value.root_folder_id = 'root'
+  form.value.drive_type = 'resource'
   form.value.oauth_token_url = 'https://api.alistgo.com/alist/ali_open/token'
   form.value.cookie = ''
   form.value.root_id = '0'
@@ -373,6 +378,7 @@ function buildAddition(): Record<string, unknown> {
       client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
+      drive_type: form.value.drive_type.trim() || 'resource',
     }
   }
   if (form.value.driver === 'aliyun_share') {
@@ -390,6 +396,7 @@ function buildAddition(): Record<string, unknown> {
       client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
+      drive_type: form.value.drive_type.trim() || 'resource',
       cookie: form.value.cookie.trim(),
       user_key: form.value.user_key.trim(),
       dir_id: form.value.dir_id.trim() || '0',
@@ -402,6 +409,7 @@ function buildAddition(): Record<string, unknown> {
       client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
       open_copy_dir: form.value.open_copy_dir.trim() || 'root',
+      drive_type: form.value.drive_type.trim() || 'resource',
       share_url: form.value.share_url.trim(),
       share_code: form.value.share_code.trim(),
       share_pwd: form.value.passcode.trim(),
@@ -841,6 +849,16 @@ onMounted(async () => {
           <NFormItem label="oauth_token_url（自建托管时填写）">
             <NInput v-model:value="form.oauth_token_url" placeholder="https://api.alistgo.com/alist/ali_open/token" />
           </NFormItem>
+          <NFormItem label="云盘类型（drive_type）">
+            <NSelect
+              v-model:value="form.drive_type"
+              :options="[
+                { label: '资源库（resource，默认）', value: 'resource' },
+                { label: '默认（default）', value: 'default' },
+                { label: '备份盘（backup）', value: 'backup' },
+              ]"
+            />
+          </NFormItem>
           <NFormItem v-if="isAliyunDrive" label="root_folder_id（挂载根目录）">
             <NInput v-model:value="form.root_folder_id" placeholder="root = 网盘根目录，也可填具体文件夹 file_id" />
           </NFormItem>
@@ -902,6 +920,16 @@ onMounted(async () => {
             </NFormItem>
             <NFormItem label="转存目录（open_copy_dir）">
               <NInput v-model:value="form.open_copy_dir" placeholder="root = 网盘根目录，也可填文件夹 file_id" />
+            </NFormItem>
+            <NFormItem label="云盘类型（drive_type）">
+              <NSelect
+                v-model:value="form.drive_type"
+                :options="[
+                  { label: '资源库（resource，默认）', value: 'resource' },
+                  { label: '默认（default）', value: 'default' },
+                  { label: '备份盘（backup）', value: 'backup' },
+                ]"
+              />
             </NFormItem>
             <NFormItem label="115 Cookie">
               <NInput

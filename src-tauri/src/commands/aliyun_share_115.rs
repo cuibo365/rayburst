@@ -9,7 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::aliyun_open::{default_oauth_url, default_root, AliyunOpenAddition, AliyunOpenDriver};
+use crate::commands::aliyun_open::{
+    default_drive_type, default_oauth_url, default_root, AliyunOpenAddition, AliyunOpenDriver,
+};
 use crate::commands::aliyun_share::{AliyunShareAddition, AliyunShareDriver};
 use crate::error::AppError;
 use crate::commands::m115_crypto;
@@ -36,6 +38,9 @@ pub struct AliyunShare115Addition {
     pub client_secret: String,
     #[serde(default = "default_oauth_url")]
     pub oauth_token_url: String,
+    /// Alipan drive of the user's own account: default / resource / backup.
+    #[serde(default = "default_drive_type")]
+    pub drive_type: String,
     /// Where the share file is copied into the own drive (`root` default).
     #[serde(default = "default_copy_dir")]
     pub open_copy_dir: String,
@@ -143,6 +148,7 @@ impl AliyunShare115Driver {
                 client_id: self.addition.client_id.clone(),
                 client_secret: self.addition.client_secret.clone(),
                 root_folder_id: "root".into(),
+                drive_type: self.addition.drive_type.clone(),
                 order_by: String::new(),
                 order_direction: String::new(),
                 oauth_token_url: self.addition.oauth_token_url.clone(),
