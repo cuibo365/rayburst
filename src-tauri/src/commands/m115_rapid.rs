@@ -251,11 +251,15 @@ pub async fn rapid_upload(
     form_pairs.push(("t", t));
     form_pairs.push(("token", token));
 
-    let mut body = url::form_urlencoded::Serializer::new(String::new());
-    for (k, v) in &form_pairs {
-        body.append_pair(k, v);
-    }
-    let encoded_form = body.finish();
+    // Scope the Serializer (borrows the String, not Send) so it drops before
+    // the first await below — otherwise the whole future is not Send.
+    let encoded_form = {
+        let mut body = url::form_urlencoded::Serializer::new(String::new());
+        for (k, v) in &form_pairs {
+            body.append_pair(k, v);
+        }
+        body.finish()
+    };
     let encrypted = cipher.encrypt(encoded_form.as_bytes());
 
     let client = reqwest::Client::builder()
