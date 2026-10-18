@@ -153,8 +153,8 @@ function resetForm() {
     mount_path: '',
     driver: 'baidu_netdisk',
     refresh_token: '',
-    client_id: DEFAULT_CLIENT_ID,
-    client_secret: DEFAULT_CLIENT_SECRET,
+    client_id: '',
+    client_secret: '',
     root_path: '/',
     root_folder_id: 'root',
     oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
@@ -188,8 +188,14 @@ function openEdit(s: CloudStorage) {
     mount_path: s.mount_path,
     driver: s.driver,
     refresh_token: (addition.refresh_token as string) ?? '',
-    client_id: (addition.client_id as string) ?? '',
-    client_secret: (addition.client_secret as string) ?? '',
+    client_id:
+      s.driver.startsWith('aliyun') && (addition.client_id as string) === DEFAULT_CLIENT_ID
+        ? ''
+        : ((addition.client_id as string) ?? ''),
+    client_secret:
+      s.driver.startsWith('aliyun') && (addition.client_secret as string) === DEFAULT_CLIENT_SECRET
+        ? ''
+        : ((addition.client_secret as string) ?? ''),
     root_path: (addition.root_path as string) ?? '/',
     root_folder_id: (addition.root_folder_id as string) ?? 'root',
     oauth_token_url: (addition.oauth_token_url as string) ?? 'https://api.alistgo.com/alist/ali_open/token',
@@ -363,8 +369,8 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_drive') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
-      client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
+      client_id: form.value.client_id.trim(),
+      client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
     }
@@ -380,8 +386,8 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_drive_115') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
-      client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
+      client_id: form.value.client_id.trim(),
+      client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
       cookie: form.value.cookie.trim(),
@@ -392,8 +398,8 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_share_115') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      client_id: form.value.client_id.trim() || DEFAULT_CLIENT_ID,
-      client_secret: form.value.client_secret.trim() || DEFAULT_CLIENT_SECRET,
+      client_id: form.value.client_id.trim(),
+      client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
       open_copy_dir: form.value.open_copy_dir.trim() || 'root',
       share_url: form.value.share_url.trim(),
