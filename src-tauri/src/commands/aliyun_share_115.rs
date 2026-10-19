@@ -2,16 +2,18 @@
 //!
 //! The share list API does not expose `content_hash` (SHA1), so a file must
 //! first be copied into the user's own Aliyun Drive (`v2/file/copy` with the
-//! share token) — where the open list returns its SHA1 — then go through the
-//! 115 rapid upload → downurl path (same as `aliyun_drive_115`). The copy is
-//! free and lands in the user's drive (`open_copy_dir`); 115 flash-transfer
-//! costs no cloud-download quota.
+//! share token) — where the web-domain own-drive listing returns its SHA1 —
+//! then go through the 115 rapid upload → downurl path (same as
+//! `aliyun_drive_115`). The copy is free and lands in the user's drive
+//! (`open_copy_dir`); 115 flash-transfer costs no cloud-download quota.
+//!
+//! Web-domain only: no open-platform credentials (client_id / client_secret /
+//! open access_token) are needed — SHA1 comes from
+//! `api.aliyundrive.com/adrive/v3/file/list` (`content_hash`), own drive id
+//! from `user.aliyundrive.com/v2/user/get` (resource drive).
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::aliyun_open::{
-    default_drive_type, default_oauth_url, default_root, AliyunOpenAddition, AliyunOpenDriver,
-};
 use crate::commands::aliyun_share::{AliyunShareAddition, AliyunShareDriver};
 use crate::error::AppError;
 use crate::commands::m115_crypto;
@@ -27,20 +29,12 @@ fn default_copy_dir() -> String {
     "root".into()
 }
 
-/// Combined addition: Aliyun open (own drive) + share + 115 session.
+/// Combined addition: Aliyun share (web-domain) + 115 session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AliyunShare115Addition {
-    /// Refresh token of the user's own Aliyun Drive (copy target + SHA1 source).
+    /// Refresh token of the user's own Aliyun Drive (web-domain;
+    /// copy target + SHA1 source).
     pub refresh_token: String,
-    #[serde(default)]
-    pub client_id: String,
-    #[serde(default)]
-    pub client_secret: String,
-    #[serde(default = "default_oauth_url")]
-    pub oauth_token_url: String,
-    /// Alipan drive of the user's own account: default / resource / backup.
-    #[serde(default = "default_drive_type")]
-    pub drive_type: String,
     /// Where the share file is copied into the own drive (`root` default).
     #[serde(default = "default_copy_dir")]
     pub open_copy_dir: String,
@@ -62,24 +56,19 @@ pub struct AliyunShare115Addition {
     #[serde(default = "default_115_dir")]
     pub dir_id: String,
     // ---- runtime caches (persisted) ----
-    /// open-domain access_token (openapi.alipan.com; hosted/oauth refresh).
-    #[serde(default)]
-    pub access_token: String,
-    #[serde(default)]
-    pub token_expires_at: u64,
     /// share-domain access_token (auth.alipan.com/v2/account/token).
-    /// Kept separate from `access_token`: the two domains issue tokens that
-    /// are NOT interchangeable.
     #[serde(default)]
     pub share_access_token: String,
     #[serde(default)]
     pub share_access_expires_at: u64,
     #[serde(default)]
-    pub drive_id: String,
-    #[serde(default)]
     pub share_token: String,
     #[serde(default)]
     pub share_token_expires_at: u64,
+    /// The user's own drive id (copy target); learned via web-domain
+    /// `user.aliyundrive.com/v2/user/get` and cached here.
+    #[serde(default)]
+    pub own_drive_id: String,
     #[serde(default)]
     pub user_id: i64,
 }
@@ -140,25 +129,6 @@ impl AliyunShare115Driver {
         db.set_storage_status(self.id, status).await
     }
 
-    fn open_driver(&self) -> AliyunOpenDriver {
-        AliyunOpenDriver {
-            id: self.id,
-            addition: AliyunOpenAddition {
-                refresh_token: self.addition.refresh_token.clone(),
-                client_id: self.addition.client_id.clone(),
-                client_secret: self.addition.client_secret.clone(),
-                root_folder_id: "root".into(),
-                drive_type: self.addition.drive_type.clone(),
-                order_by: String::new(),
-                order_direction: String::new(),
-                oauth_token_url: self.addition.oauth_token_url.clone(),
-                access_token: self.addition.access_token.clone(),
-                token_expires_at: self.addition.token_expires_at,
-                drive_id: self.addition.drive_id.clone(),
-            },
-        }
-    }
-
     fn share_driver(&self) -> AliyunShareDriver {
         AliyunShareDriver {
             id: self.id,
@@ -172,23 +142,20 @@ impl AliyunShare115Driver {
                 token_expires_at: self.addition.share_access_expires_at,
                 share_token: self.addition.share_token.clone(),
                 share_token_expires_at: self.addition.share_token_expires_at,
-                drive_id: self.addition.drive_id.clone(),
-                own_drive_id: String::new(),
+                drive_id: String::new(),
+                own_drive_id: self.addition.own_drive_id.clone(),
             },
         }
     }
 
-    fn sync_caches(&mut self, open: &AliyunOpenDriver, share: &AliyunShareDriver) {
-        self.addition.access_token = open.addition.access_token.clone();
-        self.addition.token_expires_at = open.addition.token_expires_at;
-        self.addition.drive_id = open.addition.drive_id.clone();
-        // refresh_token 会旋转：share 驱动最后刷新，取它的旋转值
-        // （托管模式下 open/share 同源于 app 域 token，可互换）。
+    fn sync_caches(&mut self, share: &AliyunShareDriver) {
+        // refresh_token 会旋转：以 share 驱动最后刷新的旋转值为准。
         self.addition.refresh_token = share.addition.refresh_token.clone();
         self.addition.share_access_token = share.addition.access_token.clone();
         self.addition.share_access_expires_at = share.addition.token_expires_at;
         self.addition.share_token = share.addition.share_token.clone();
         self.addition.share_token_expires_at = share.addition.share_token_expires_at;
+        self.addition.own_drive_id = share.addition.own_drive_id.clone();
     }
 
     /// List the share tree.
@@ -199,8 +166,7 @@ impl AliyunShare115Driver {
     ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
         let mut share = self.share_driver();
         let r = share.list(db, file_id).await;
-        let open = self.open_driver();
-        self.sync_caches(&open, &share);
+        self.sync_caches(&share);
         if let Ok(files) = &r {
             if self.addition.user_id == 0 {
                 self.addition.user_id = AliyunShare115Addition::parse_uid(&self.addition.cookie);
@@ -223,17 +189,17 @@ impl AliyunShare115Driver {
                 "无法从 115 cookie 解析 UID，请检查 cookie 是否完整（需 UID=…）".into(),
             ));
         }
-        let mut open = self.open_driver();
+        let ua = crate::commands::cloud_driver::m115_ua().await;
+        let client = Self::http_client(&ua)?;
         let mut share = self.share_driver();
-        // ensure tokens first
-        let _ = open.ensure_access_token(db).await?;
-        let at = open.addition.access_token.clone();
-        let _ = open.ensure_drive_id(db, &at).await?;
+        // ensure tokens first (web-domain only)
         let _ = share.ensure_access_token(db).await?;
         let _ = share.ensure_share_token(db).await?;
-        self.sync_caches(&open, &share);
+        let access = share.addition.access_token.clone();
+        // own drive id from the web domain (resource drive by default)
+        let own_drive = share.ensure_own_drive_id(&client, &access).await?;
+        self.sync_caches(&share);
 
-        let ua = crate::commands::cloud_driver::m115_ua().await;
         let cookie = self.addition.cookie.clone();
         let dir_id = self.addition.dir_id.trim().to_string();
         let user_key = self.addition.user_key.clone();
@@ -252,7 +218,6 @@ impl AliyunShare115Driver {
             let _ = share.list(db, "root").await?;
             share_drive = share.addition.drive_id.clone();
         }
-        let own_drive = open.addition.drive_id.clone();
         let copy_dir = {
             let d = self.addition.open_copy_dir.trim();
             if d.is_empty() {
@@ -261,12 +226,10 @@ impl AliyunShare115Driver {
                 d.to_string()
             }
         };
-        let access = open.addition.access_token.clone();
         let share_token = share.addition.share_token.clone();
         // The copy API lives on api.alipan.com (share domain) — it wants the
         // token issued by auth.alipan.com, not the open-platform token.
         let share_access = share.addition.access_token.clone();
-        let client = Self::http_client(&ua)?;
 
         let mut result = Vec::new();
         for file in files {
@@ -279,7 +242,7 @@ impl AliyunShare115Driver {
                 ));
             }
             // 1) copy the share file into the own drive
-            let copied = self
+            let _copied = self
                 .copy_to_own(
                     &client,
                     &share_access,
@@ -292,9 +255,9 @@ impl AliyunShare115Driver {
                     &file.name,
                 )
                 .await?;
-            // 2) find the copied file in the own drive → SHA1
-            let (copy_id, sha1) = self
-                .find_copied(&mut open, db, &copy_dir, &file.name, file.size, copied)
+            // 2) find the copied file in the own drive → SHA1 (web-domain)
+            let (_copy_id, sha1) = self
+                .find_copied(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
                 .await?;
             if sha1.is_empty() {
                 return Err(AppError::CloudDrive(format!(
@@ -337,7 +300,6 @@ impl AliyunShare115Driver {
                 format!("User-Agent: {ua}"),
                 format!("Cookie: {hc}"),
             ]));
-            let _ = copy_id;
         }
         if result.is_empty() {
             return Err(AppError::CloudDrive("未能获取任何文件的 115 下载地址".into()));
@@ -389,19 +351,20 @@ impl AliyunShare115Driver {
     }
 
     /// Poll the own-drive copy dir until a file matching name+size appears.
+    /// SHA1 comes from the web-domain own-drive listing (`content_hash`).
     async fn find_copied(
         &mut self,
-        open: &mut AliyunOpenDriver,
+        share: &mut AliyunShareDriver,
         db: &Database,
         copy_dir: &str,
+        own_drive: &str,
         name: &str,
         size: u64,
-        _copy_resp: serde_json::Value,
     ) -> Result<(String, String), AppError> {
         // The copy is async; poll the target dir up to ~30s.
         for _ in 0..30 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let list = open.list(db, copy_dir).await?;
+            let list = share.list_own_dir(db, own_drive, copy_dir).await?;
             for f in list {
                 if f.name == name && f.size == size && !f.sha1.is_empty() {
                     return Ok((f.id.clone(), f.sha1.clone()));

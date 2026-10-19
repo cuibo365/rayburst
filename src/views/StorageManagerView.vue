@@ -420,11 +420,7 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_share_115') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      client_id: form.value.client_id.trim(),
-      client_secret: form.value.client_secret.trim(),
-      oauth_token_url: form.value.oauth_token_url.trim(),
       open_copy_dir: form.value.open_copy_dir.trim() || 'root',
-      drive_type: form.value.drive_type.trim() || 'resource',
       share_url: form.value.share_url.trim(),
       share_code: form.value.share_code.trim(),
       share_pwd: form.value.passcode.trim(),
@@ -943,28 +939,10 @@ onMounted(async () => {
             />
           </NFormItem>
           <template v-if="isAliyunShare115">
-            <NSpace :size="12">
-              <NFormItem label="client_id" class="storage-flex-item">
-                <NInput v-model:value="form.client_id" placeholder="默认 alist 官方 client_id" />
-              </NFormItem>
-              <NFormItem label="client_secret" class="storage-flex-item">
-                <NInput v-model:value="form.client_secret" placeholder="默认 alist 官方 client_secret" />
-              </NFormItem>
-            </NSpace>
-            <NFormItem label="oauth_token_url（自建托管时填写）">
-              <NInput v-model:value="form.oauth_token_url" placeholder="https://api.alistgo.com/alist/ali_open/token" />
-            </NFormItem>
             <NFormItem label="转存目录（open_copy_dir）">
-              <NInput v-model:value="form.open_copy_dir" placeholder="root = 网盘根目录，也可填文件夹 file_id" />
-            </NFormItem>
-            <NFormItem label="云盘类型（drive_type）">
-              <NSelect
-                v-model:value="form.drive_type"
-                :options="[
-                  { label: '资源库（resource，默认）', value: 'resource' },
-                  { label: '默认（default）', value: 'default' },
-                  { label: '备份盘（backup）', value: 'backup' },
-                ]"
+              <NInput
+                v-model:value="form.open_copy_dir"
+                placeholder="root = 网盘根目录，也可填文件夹 file_id（留空自动转存到资源库盘根目录）"
               />
             </NFormItem>
             <NFormItem label="115 Cookie">

@@ -265,6 +265,66 @@ impl AliyunShareDriver {
         Ok(out)
     }
 
+    /// List a directory of the user's own drive (web-domain only).
+    ///
+    /// Unlike the share listing, the own-drive `adrive/v3/file/list` items
+    /// carry `content_hash` (SHA1) — this is how the *To115 drivers obtain
+    /// the SHA1 for the 115 rapid upload without the open platform.
+    pub async fn list_own_dir(
+        &mut self,
+        db: &Database,
+        drive_id: &str,
+        parent_file_id: &str,
+    ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
+        let access = self.ensure_access_token(db).await?;
+        let client = Self::http_client()?;
+        let parent = if parent_file_id.is_empty() || parent_file_id == "root" {
+            "root".to_string()
+        } else {
+            parent_file_id.to_string()
+        };
+        const MAX_PAGES: usize = 100;
+        let mut out = Vec::new();
+        let mut marker = String::new();
+        for _ in 0..MAX_PAGES {
+            let resp = client
+                .post("https://api.aliyundrive.com/adrive/v3/file/list")
+                .header("Authorization", format!("Bearer\t{access}"))
+                .header("X-Canary", "client=windows,app=adrive,version=v6.0.0")
+                .json(&serde_json::json!({
+                    "drive_id": drive_id,
+                    "parent_file_id": parent,
+                    "limit": 200,
+                    "marker": marker,
+                }))
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求阿里云盘目录列表失败: {e}")))?;
+            let status = resp.status();
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("解析阿里云盘目录列表失败: {e}")))?;
+            if !status.is_success() {
+                return Err(AppError::CloudDrive(format!(
+                    "阿里云盘目录列表失败（HTTP {status}）：{}",
+                    json.get("message").and_then(|m| m.as_str()).unwrap_or("")
+                )));
+            }
+            let items = json["items"].as_array().cloned().unwrap_or_default();
+            for item in &items {
+                // Own-drive items carry content_hash (SHA1); the converter
+                // picks it up into the `sha1` field.
+                out.push(alist_file_to_drive(item));
+            }
+            marker = json["next_marker"].as_str().unwrap_or("").to_string();
+            if marker.is_empty() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     /// Resolve CDN download URLs for the selected share files.
     ///
     /// Flow (web-domain only, mirrors LinkSwift / the alipan web app):
@@ -412,7 +472,8 @@ impl AliyunShareDriver {
     }
 
     /// The user's own drive id (copy target), cached in `own_drive_id`.
-    async fn ensure_own_drive_id(
+    /// pub(crate): also used by `aliyun_share_115` (web-domain only, no open).
+    pub(crate) async fn ensure_own_drive_id(
         &mut self,
         client: &reqwest::Client,
         access: &str,
