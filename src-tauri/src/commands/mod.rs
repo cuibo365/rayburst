@@ -32,6 +32,7 @@ pub mod ui;
 pub mod updater;
 pub mod upnp;
 
+pub use aliyun_qr::*;
 pub use aria2::*;
 pub use bt_blocklist::*;
 pub use cloud_drive::*;
