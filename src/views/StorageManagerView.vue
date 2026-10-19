@@ -251,13 +251,17 @@ const qrError = ref('')
 const qrGenerating = ref(false)
 const qrSource = ref('alipaymini')
 const m115QrSourceOptions = [
-  { label: '支付宝小程序（默认）', value: 'alipaymini' },
-  { label: '网页', value: 'web' },
-  { label: '安卓', value: 'android' },
-  { label: 'iOS', value: 'ios' },
-  { label: '电视', value: 'tv' },
-  { label: '微信小程序', value: 'wechatmini' },
-  { label: 'QQ 安卓', value: 'qandroid' },
+  { label: '115生活（支付宝小程序）', value: 'alipaymini' },
+  { label: '115生活（网页端）', value: 'web' },
+  { label: '115生活（iOS端）', value: 'ios' },
+  { label: '115（iOS端）', value: '115ios' },
+  { label: '115生活（Android端）', value: 'android' },
+  { label: '115（Android端）', value: '115android' },
+  { label: '115（iPad端）', value: '115ipad' },
+  { label: '115生活（Android电视端）', value: 'tv' },
+  { label: '115管理（Android端）', value: 'qandroid' },
+  { label: '115生活（微信小程序）', value: 'wechatmini' },
+  { label: '115（鸿蒙端）', value: 'harmony' },
 ]
 let qrTimer: number | null = null
 

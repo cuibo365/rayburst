@@ -56,8 +56,15 @@ const M115_PAGE_SIZE: i64 = 1000;
 /// 115 QR login endpoints (SDK qrcode.go).
 const M115_QRCODE_TOKEN_URL: &str = "https://qrcodeapi.115.com/api/1.0/web/1.0/token";
 const M115_QRCODE_STATUS_URL: &str = "https://qrcodeapi.115.com/get/status/";
-/// QR login device sources supported by 115 (mirrors alist's 115 driver / 115driver crate).
-const M115_QR_SOURCES: [&str; 7] = ["web", "android", "ios", "tv", "alipaymini", "wechatmini", "qandroid"];
+/// QR login device sources supported by 115 (mirrors xiaoya's all_in_one.sh):
+/// alipaymini 115生活（支付宝小程序）/ web 115生活（网页端）/ ios 115生活（iOS端）/
+/// 115ios 115（iOS端）/ android 115生活（Android端）/ 115android 115（Android端）/
+/// 115ipad 115（iPad端）/ tv 115生活（Android电视端）/ qandroid 115管理（Android端）/
+/// wechatmini 115生活（微信小程序）/ harmony 115（鸿蒙端）
+const M115_QR_SOURCES: [&str; 11] = [
+    "web", "ios", "115ios", "android", "115android", "115ipad", "tv", "qandroid", "wechatmini",
+    "alipaymini", "harmony",
+];
 const M115_QR_DEFAULT_SOURCE: &str = "alipaymini";
 
 /// Latest 115Browser version (fetched once; falls back to `M115_UA_FALLBACK`).
