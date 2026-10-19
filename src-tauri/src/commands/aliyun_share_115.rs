@@ -279,7 +279,10 @@ impl AliyunShare115Driver {
             } else {
                 format!("{base}_{stamp}.{ext}")
             };
-            let up = crate::commands::m115_rapid::rapid_upload(
+            // 3) 115 rapid upload + sign proof + status=4 回退：命中（7）用
+            // 转存到自己盘的文件通过网页域下载地址 Range 读取校验区间，
+            // 被拒（4）时按 SHA1 在目标目录里直接找 pickcode。
+            let pickcode = crate::commands::m115_rapid::rapid_or_find_pickcode(
                 &cookie,
                 &ua,
                 user_id,
@@ -288,9 +291,67 @@ impl AliyunShare115Driver {
                 &target_name,
                 file.size,
                 &sha1,
+                |range: &str| {
+                    let range = range.to_string();
+                    let access = access.clone();
+                    let own_drive_id = own_drive.clone();
+                    let copy_file_id = _copy_id.clone();
+                    let file_name = file.name.clone();
+                    async move {
+                        let client = reqwest::Client::new();
+                        let resp = client
+                            .post("https://api.alipan.com/v2/file/get_download_url")
+                            .header("Authorization", format!("Bearer {access}"))
+                            .header("X-Canary", "client=windows,app=adrive,version=v6.0.0")
+                            .header("Referer", "https://www.alipan.com/")
+                            .json(&serde_json::json!({
+                                "drive_id": own_drive_id,
+                                "file_id": copy_file_id,
+                            }))
+                            .send()
+                            .await
+                            .map_err(|e| {
+                                AppError::CloudDrive(format!(
+                                    "获取阿里转存文件下载地址失败: {e}"
+                                ))
+                            })?;
+                        let status = resp.status();
+                        let text = resp
+                            .text()
+                            .await
+                            .map_err(|e| AppError::CloudDrive(format!("读取阿里下载响应失败: {e}")))?;
+                        if !status.is_success() {
+                            return Err(AppError::CloudDrive(format!(
+                                "获取 {} 下载地址失败（HTTP {status}）：{}",
+                                file_name,
+                                text.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        let j: serde_json::Value = serde_json::from_str(&text)
+                            .map_err(|e| AppError::CloudDrive(format!("解析阿里下载响应失败: {e}")))?;
+                        let url = j["url"].as_str().ok_or_else(|| {
+                            AppError::CloudDrive(format!("阿里云盘未返回 {} 的下载地址", file_name))
+                        })?;
+                        let bytes = client
+                            .get(url)
+                            .header("Range", format!("bytes={range}"))
+                            .header("Referer", "https://www.alipan.com/")
+                            .send()
+                            .await
+                            .map_err(|e| {
+                                AppError::CloudDrive(format!("下载阿里文件校验区间失败: {e}"))
+                            })?
+                            .bytes()
+                            .await
+                            .map_err(|e| {
+                                AppError::CloudDrive(format!("读取阿里文件校验区间失败: {e}"))
+                            })?;
+                        Ok(bytes.to_vec())
+                    }
+                },
             )
             .await?;
-            let (dlink, ck) = self.downurl(&ua, &cookie, &up.pickcode, &file.name).await?;
+            let (dlink, ck) = self.downurl(&ua, &cookie, &pickcode, &file.name).await?;
             // The CDN rejects the download unless it carries the cookie issued
             // by this downurl response (same rule as the 115 driver).
             let mut hc = cookie.clone();

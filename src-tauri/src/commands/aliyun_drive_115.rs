@@ -174,6 +174,11 @@ impl AliyunDrive115Driver {
         let cookie = self.addition.cookie.clone();
         let dir_id = self.addition.dir_id.trim().to_string();
         let user_key = self.addition.user_key.clone();
+        // Refresh the embedded open-driver token once up front (rotates and
+        // persists); the sign-proof reader below uses it for Range downloads.
+        let mut open = self.open_driver();
+        let access_token = open.ensure_access_token(db).await?;
+        self.sync_open_cache(&open);
         let mut result = Vec::new();
         for file in files {
             if file.isdir || file.sha1.is_empty() {
@@ -198,7 +203,9 @@ impl AliyunDrive115Driver {
             } else {
                 format!("{base}_{stamp}.{ext}")
             };
-            let up = crate::commands::m115_rapid::rapid_upload(
+            // 闪传 + 签名证明 + status=4 回退：命中（7）用阿里 Range 读区间，
+            // 被拒（4）时按 SHA1 在目标目录里直接找 pickcode。
+            let pickcode = crate::commands::m115_rapid::rapid_or_find_pickcode(
                 &cookie,
                 &ua,
                 user_id,
@@ -207,9 +214,42 @@ impl AliyunDrive115Driver {
                 &target_name,
                 file.size,
                 &file.sha1,
+                |range: &str| {
+                    let range = range.to_string();
+                    let token = access_token.clone();
+                    let drive_id = file.drive_id.clone();
+                    let file_id = file.id.clone();
+                    async move {
+                        let client = reqwest::Client::new();
+                        let resp = client
+                            .post("https://openapi.aliyundrive.com/adrive/v1.0/openFile/getDownloadUrl")
+                            .bearer_auth(&token)
+                            .json(&serde_json::json!({"drive_id": drive_id, "file_id": file_id}))
+                            .send()
+                            .await
+                            .map_err(|e| AppError::CloudDrive(format!("获取阿里下载地址失败: {e}")))?;
+                        let j: serde_json::Value = resp
+                            .json()
+                            .await
+                            .map_err(|e| AppError::CloudDrive(format!("解析阿里下载地址失败: {e}")))?;
+                        let url = j["url"].as_str().ok_or_else(|| {
+                            AppError::CloudDrive("阿里下载地址为空（文件可能已失效）".into())
+                        })?;
+                        let bytes = client
+                            .get(url)
+                            .header("Range", format!("bytes={range}"))
+                            .send()
+                            .await
+                            .map_err(|e| AppError::CloudDrive(format!("下载阿里文件校验区间失败: {e}")))?
+                            .bytes()
+                            .await
+                            .map_err(|e| AppError::CloudDrive(format!("读取阿里文件校验区间失败: {e}")))?;
+                        Ok(bytes.to_vec())
+                    }
+                },
             )
             .await?;
-            let (dlink, ck) = self.downurl(&ua, &cookie, &up.pickcode, &file.name).await?;
+            let (dlink, ck) = self.downurl(&ua, &cookie, &pickcode, &file.name).await?;
             // The CDN rejects the download unless it carries the cookie issued
             // by this downurl response (same rule as the 115 driver).
             let mut hc = cookie.clone();

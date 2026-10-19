@@ -36,7 +36,7 @@ const REMOTE_PUB_KEY: [u8; 56] = [
 
 const CRC_SALT: &str = "^j>WD3Kr?J2gLFjD4W2y@";
 const MD5_SALT: &str = "Qclm8MGWUv59TnrR0XPg";
-const APP_VERSION: &str = "27.0.5.7";
+const APP_VERSION: &str = "36.0.1";
 
 /// ECDH cipher mirroring the Go `ec115.EcdhCipher`.
 struct EcdhCipher {
@@ -203,16 +203,24 @@ fn generate_token(
     md5_hex(s.as_bytes())
 }
 
-/// Rapid-upload result.
+/// Outcome of a single ApiUploadInit submission.
 #[derive(Debug, Clone)]
-pub struct RapidUploadResult {
-    /// pickcode of the hit file (status==2).
-    pub pickcode: String,
+pub enum RapidUploadOutcome {
+    /// status==2: rapid upload hit, file created in the target dir.
+    Hit(String),
+    /// status==7: 115 matched the SHA1 but requires proof we own the data —
+    /// re-submit with `sign_key` plus `sign_val` = SHA1 of the `sign_check`
+    /// byte range of the real file content.
+    SignRequired {
+        sign_key: String,
+        sign_check: String,
+    },
+    /// status 1/4/…: not in the library / rejected; real upload required.
+    Miss { status: i64, message: String },
 }
 
-/// Submit a SHA1-based rapid upload to the 115 library. Returns the pickcode
-/// on a hit; errors when the file is not already in the 115 library
-/// (`status==7` would require re-hashing a local file, which we do not have).
+/// Submit a SHA1-based rapid upload (first attempt, no sign proof).
+/// Returns `SignRequired` when 115 wants the caller to prove file ownership.
 pub async fn rapid_upload(
     cookie: &str,
     ua: &str,
@@ -222,11 +230,81 @@ pub async fn rapid_upload(
     file_name: &str,
     file_size: u64,
     file_id: &str,
-) -> Result<RapidUploadResult, AppError> {
+) -> Result<RapidUploadOutcome, AppError> {
+    rapid_upload_signed(cookie, ua, user_id, user_key, dir_id, file_name, file_size, file_id, "", "")
+        .await
+}
+
+fn sha1_upper_hex(data: &[u8]) -> String {
+    let mut h = Sha1::new();
+    h.update(data);
+    h.finalize().iter().map(|b| format!("{b:02X}")).collect()
+}
+
+/// Full rapid-upload flow with sign proof: first attempt; if 115 returns
+/// status==7 (`SignRequired`), reads the `sign_check` byte range of the real
+/// file via `range_reader` (e.g. an HTTP Range request against the source
+/// cloud file), computes `sign_val`, and re-submits. Returns the pickcode on
+/// a hit.
+pub async fn rapid_upload_with_range<F, Fut>(
+    cookie: &str,
+    ua: &str,
+    user_id: i64,
+    user_key: &str,
+    dir_id: &str,
+    file_name: &str,
+    file_size: u64,
+    file_id: &str,
+    range_reader: F,
+) -> Result<String, AppError>
+where
+    F: Fn(&str) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, AppError>>,
+{
+    let mut outcome = rapid_upload(cookie, ua, user_id, user_key, dir_id, file_name, file_size, file_id)
+        .await?;
+    loop {
+        match outcome {
+            RapidUploadOutcome::Hit(pickcode) => return Ok(pickcode),
+            RapidUploadOutcome::SignRequired { sign_key, sign_check } => {
+                let data = range_reader(&sign_check).await?;
+                let sign_val = sha1_upper_hex(&data);
+                outcome = rapid_upload_signed(
+                    cookie, ua, user_id, user_key, dir_id, file_name, file_size, file_id,
+                    &sign_key, &sign_val,
+                )
+                .await?;
+            }
+            RapidUploadOutcome::Miss { status, message } => {
+                return Err(AppError::CloudDrive(format!(
+                    "115 库中不存在该文件（闪传未命中，status={status}：{message}），无法秒传；真实上传暂未支持：{file_name}"
+                )));
+            }
+        }
+    }
+}
+
+/// Submit a SHA1-based rapid upload with an optional sign proof
+/// (`sign_key`/`sign_val` from a previous `SignRequired` response).
+pub async fn rapid_upload_signed(
+    cookie: &str,
+    ua: &str,
+    user_id: i64,
+    user_key: &str,
+    dir_id: &str,
+    file_name: &str,
+    file_size: u64,
+    file_id: &str,
+    sign_key: &str,
+    sign_val: &str,
+) -> Result<RapidUploadOutcome, AppError> {
     let cipher = EcdhCipher::new()?;
     let target = format!("U_1_{}", dir_id.trim());
     let file_size_str = file_size.to_string();
     let uid = user_id.to_string();
+    // 115 秒传的 QuickID 必须是大写 SHA1（SDK: strings.ToUpper(...)）；
+    // 阿里云盘/分享返回的 sha1 是小写，不转大写会永远未命中（status 1/4）。
+    let file_id = file_id.trim().to_uppercase();
 
     // base form (SDK sets these once)
     let mut form_pairs: Vec<(&str, String)> = vec![
@@ -235,11 +313,15 @@ pub async fn rapid_upload(
         ("userid", uid.clone()),
         ("filename", file_name.to_string()),
         ("filesize", file_size_str.clone()),
-        ("fileid", file_id.to_string()),
+        ("fileid", file_id.clone()),
         ("target", target.clone()),
-        ("sig", generate_signature(user_id, user_key, file_id, &target)),
+        ("sig", generate_signature(user_id, user_key, &file_id, &target)),
         ("topupload", "true".to_string()),
     ];
+    if !sign_key.is_empty() && !sign_val.is_empty() {
+        form_pairs.push(("sign_key", sign_key.to_string()));
+        form_pairs.push(("sign_val", sign_val.to_string()));
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -247,12 +329,15 @@ pub async fn rapid_upload(
         .unwrap_or(0);
     let t = now.to_string();
     let k_ec = cipher.encode_token(now);
-    let token = generate_token(user_id, file_id, &file_size_str, &t, "", "");
+    let token = generate_token(user_id, &file_id, &file_size_str, &t, sign_key, sign_val);
     form_pairs.push(("t", t));
     form_pairs.push(("token", token));
 
     // Scope the Serializer (borrows the String, not Send) so it drops before
     // the first await below — otherwise the whole future is not Send.
+    // 115 服务端按 Go `url.Values.Encode()` 的字典序解析加密 payload，
+    // 必须与上游（115driver/alist）编码顺序一致，否则签名回合会失败。
+    form_pairs.sort_by(|a, b| a.0.cmp(b.0));
     let encoded_form = {
         let mut body = url::form_urlencoded::Serializer::new(String::new());
         for (k, v) in &form_pairs {
@@ -297,16 +382,122 @@ pub async fn rapid_upload(
             .as_str()
             .ok_or_else(|| AppError::CloudDrive("115 闪传命中但缺少 pickcode".into()))?
             .to_string();
-        return Ok(RapidUploadResult { pickcode });
+        return Ok(RapidUploadOutcome::Hit(pickcode));
     }
     if status == 7 {
-        return Err(AppError::CloudDrive(format!(
-            "115 库中不存在该文件（{}），无法秒传（闪传未命中）",
-            file_name
-        )));
+        return Ok(RapidUploadOutcome::SignRequired {
+            sign_key: json["sign_key"].as_str().unwrap_or("").to_string(),
+            sign_check: json["sign_check"].as_str().unwrap_or("").to_string(),
+        });
     }
     let msg = json["message"].as_str().unwrap_or("未知错误");
-    Err(AppError::CloudDrive(format!(
-        "115 闪传失败（status={status}）：{msg}"
-    )))
+    Ok(RapidUploadOutcome::Miss {
+        status,
+        message: msg.to_string(),
+    })
+}
+
+/// 115 目录列表接口（webapi.115.com/files，带 `sha1=1` 时每项含 `sha`
+///（大写 SHA1）与 `pc`（pickcode））。
+const API_DIR_FILES: &str = "https://webapi.115.com/files";
+
+/// Look up a pickcode in a 115 directory by full SHA1 (`sha` field). Returns
+/// `Ok(None)` when no file in the directory carries that SHA1. Used as a
+/// fallback when rapid upload is rejected with status==4 (the file already
+/// exists in the target dir, so 115 refuses to create a duplicate — the file
+/// is right there and its pickcode gives us the CDN link directly).
+pub async fn find_pickcode_by_sha1(
+    cookie: &str,
+    ua: &str,
+    dir_id: &str,
+    sha1: &str,
+) -> Result<Option<String>, AppError> {
+    let target = sha1.trim().to_uppercase();
+    if target.is_empty() {
+        return Ok(None);
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(ua)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
+    let mut offset = 0u64;
+    const PAGE: u64 = 100;
+    loop {
+        let url = format!(
+            "{API_DIR_FILES}?cid={}&limit={PAGE}&offset={offset}&o=user_ptime&asc=0&fc_mix=0&format=json&sha1=1",
+            dir_id.trim()
+        );
+        let resp = client
+            .get(&url)
+            .header("Cookie", cookie)
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("列出 115 目录失败: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("读取 115 目录响应失败: {e}")))?;
+        if !status.is_success() {
+            return Err(AppError::CloudDrive(format!(
+                "列出 115 目录失败（HTTP {status}）：{}",
+                text.chars().take(200).collect::<String>()
+            )));
+        }
+        let j: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| AppError::CloudDrive(format!("解析 115 目录响应失败: {e}")))?;
+        let items = j["data"].as_array().cloned().unwrap_or_default();
+        for item in &items {
+            let sha = item["sha"].as_str().unwrap_or("");
+            if sha.eq_ignore_ascii_case(&target) {
+                if let Some(pc) = item["pc"].as_str().filter(|s| !s.is_empty()) {
+                    return Ok(Some(pc.to_string()));
+                }
+                // same SHA1 but no pickcode (folder item / unavailable) — skip
+            }
+        }
+        if (items.len() as u64) < PAGE {
+            break;
+        }
+        offset += PAGE;
+        if offset > 5000 {
+            break;
+        }
+    }
+    Ok(None)
+}
+
+/// Rapid upload with sign proof, falling back to a SHA1 directory lookup when
+/// 115 rejects the rapid upload (status==4 — the file already exists in the
+/// target dir). Returns a pickcode either way.
+pub async fn rapid_or_find_pickcode<F, Fut>(
+    cookie: &str,
+    ua: &str,
+    user_id: i64,
+    user_key: &str,
+    dir_id: &str,
+    file_name: &str,
+    file_size: u64,
+    file_id: &str,
+    range_reader: F,
+) -> Result<String, AppError>
+where
+    F: Fn(&str) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, AppError>>,
+{
+    match rapid_upload_with_range(
+        cookie, ua, user_id, user_key, dir_id, file_name, file_size, file_id, range_reader,
+    )
+    .await
+    {
+        Ok(pickcode) => Ok(pickcode),
+        Err(e) => {
+            // status=4: 同目录已有同 SHA1 → 直接列出目标目录按 SHA1 找 pickcode。
+            if let Some(pc) = find_pickcode_by_sha1(cookie, ua, dir_id, file_id).await? {
+                return Ok(pc);
+            }
+            Err(e)
+        }
+    }
 }
