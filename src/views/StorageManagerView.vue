@@ -116,6 +116,7 @@ const form = ref<{
   dir_id: string
   open_copy_dir: string
   own_drive_id: string
+  qr_source: string
   remark: string
 }>({
   mount_path: '',
@@ -137,6 +138,7 @@ const form = ref<{
   dir_id: '0',
   open_copy_dir: 'root',
   own_drive_id: '',
+  qr_source: '',
   remark: '',
 })
 
@@ -173,6 +175,7 @@ function resetForm() {
     dir_id: '0',
     open_copy_dir: 'root',
     own_drive_id: '',
+    qr_source: '',
     remark: '',
   }
 }
@@ -216,6 +219,7 @@ function openEdit(s: CloudStorage) {
     dir_id: (addition.dir_id as string) ?? '0',
     open_copy_dir: (addition.open_copy_dir as string) ?? 'root',
     own_drive_id: (addition.own_drive_id as string) ?? '',
+    qr_source: (addition.qr_source as string) ?? '',
     remark: s.remark,
   }
   showDialog.value = true
@@ -237,6 +241,7 @@ function onDriverChange() {
   form.value.user_key = ''
   form.value.dir_id = '0'
   form.value.open_copy_dir = 'root'
+  form.value.qr_source = ''
 }
 
 // --- qrcode login (扫码获取 Cookie): quark / 115 ---
@@ -295,6 +300,7 @@ async function genQrcode() {
           )
           if (r.state === 'success' && r.cookie) {
             form.value.cookie = r.cookie
+            form.value.qr_source = qrSource.value
             stopQrPoll()
             qrDialog.value = false
             message.success('扫码成功，Cookie 已自动填入')
@@ -524,6 +530,7 @@ function buildAddition(): Record<string, unknown> {
     return {
       cookie: form.value.cookie.trim(),
       root_id: form.value.root_id.trim() || '0',
+      qr_source: form.value.qr_source.trim() || undefined,
     }
   }
   if (form.value.driver === 'm115_share') {
@@ -532,6 +539,7 @@ function buildAddition(): Record<string, unknown> {
       share_code: form.value.share_code.trim(),
       receive_code: form.value.receive_code.trim(),
       cookie: form.value.cookie.trim(),
+      qr_source: form.value.qr_source.trim() || undefined,
     }
   }
   if (form.value.driver === 'aliyun_drive') {
@@ -952,6 +960,15 @@ onMounted(async () => {
           <NFormItem label="root_id（挂载根目录 cid）">
             <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
           </NFormItem>
+          <NFormItem label="扫码设备源（记录）">
+            <NSelect
+              v-model:value="form.qr_source"
+              :options="m115QrSourceOptions"
+              clearable
+              size="small"
+              placeholder="未记录（扫码获取时自动填写）"
+            />
+          </NFormItem>
         </template>
 
         <template v-else-if="isM115Share">
@@ -983,6 +1000,15 @@ onMounted(async () => {
             Cookies 全选复制（形如 <code>UID=xxx; CID=yyy; SEID=zzz</code>），或点右上角「扫码获取」用 115 App
             自动获取。
           </p>
+          <NFormItem label="扫码设备源（记录）">
+            <NSelect
+              v-model:value="form.qr_source"
+              :options="m115QrSourceOptions"
+              clearable
+              size="small"
+              placeholder="未记录（扫码获取时自动填写）"
+            />
+          </NFormItem>
         </template>
 
         <template v-else-if="isAliyunDrive || isAliyunDrive115">

@@ -179,6 +179,10 @@ pub struct M115Addition {
     /// Browse root category id; `0` is the drive root.
     #[serde(default = "default_m115_root")]
     pub root_id: String,
+    /// QR login device source used when the cookie was obtained by scanning
+    /// (e.g. `alipaymini`); informational, editable in the form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qr_source: Option<String>,
 }
 
 fn default_m115_root() -> String {
@@ -212,6 +216,10 @@ pub struct M115ShareAddition {
     /// Optional 115 account cookie (UID/CID/SEID[/KID]); required to download.
     #[serde(default)]
     pub cookie: String,
+    /// QR login device source used when the cookie was obtained by scanning;
+    /// informational, editable in the form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qr_source: Option<String>,
 }
 
 impl M115ShareAddition {
