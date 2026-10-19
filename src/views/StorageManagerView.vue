@@ -396,6 +396,7 @@ function buildAddition(): Record<string, unknown> {
       share_url: form.value.share_url.trim(),
       share_code: form.value.share_code.trim(),
       share_pwd: form.value.passcode.trim(),
+      open_copy_dir: form.value.open_copy_dir.trim() || 'root',
     }
   }
   if (form.value.driver === 'aliyun_drive_115') {
@@ -925,8 +926,11 @@ onMounted(async () => {
           </NFormItem>
           <p class="storage-quark-tip">
             <strong>注意：</strong>分享文件无 SHA1，下载前会先 <code>v2/file/copy</code> 转存到你自己的阿里云盘
-            （默认根目录，见下方「转存目录」），再走 SHA1 → 115 闪传 → 直链。
+            （默认根目录，见下方「转存目录」），再从自己的盘取直链下载。
           </p>
+          <NFormItem v-if="isAliyunShare" label="转存目录（open_copy_dir）">
+            <NInput v-model:value="form.open_copy_dir" placeholder="root = 网盘根目录，也可填文件夹 file_id" />
+          </NFormItem>
           <template v-if="isAliyunShare115">
             <NSpace :size="12">
               <NFormItem label="client_id" class="storage-flex-item">

@@ -32,6 +32,10 @@ pub struct AliyunShareAddition {
     /// Optional share password.
     #[serde(default)]
     pub share_pwd: String,
+    /// Where the share file is copied into the own drive before downloading
+    /// (`root` = drive root; otherwise a folder file_id).
+    #[serde(default = "default_copy_dir")]
+    pub open_copy_dir: String,
     // ---- runtime cache (persisted so rotated tokens survive) ----
     #[serde(default)]
     pub access_token: String,
@@ -41,9 +45,17 @@ pub struct AliyunShareAddition {
     pub share_token: String,
     #[serde(default)]
     pub share_token_expires_at: u64,
-    /// drive_id learned from the first list item.
+    /// drive_id learned from the first list item (the share's hosting drive).
     #[serde(default)]
     pub drive_id: String,
+    /// The user's own drive id (copy target); learned from the copy response
+    /// or the own-drive listing.
+    #[serde(default)]
+    pub own_drive_id: String,
+}
+
+fn default_copy_dir() -> String {
+    "root".into()
 }
 
 impl AliyunShareAddition {
@@ -254,6 +266,12 @@ impl AliyunShareDriver {
     }
 
     /// Resolve CDN download URLs for the selected share files.
+    ///
+    /// Flow (web-domain only, mirrors LinkSwift / the alipan web app):
+    /// copy the share file into the user's own drive via `v2/file/copy`,
+    /// then download it from the own drive via `v2/file/get_download_url`
+    /// (the share-scoped `get_share_link_download_url` endpoint 410s on
+    /// many files).
     pub async fn get_dlinks(
         &mut self,
         db: &Database,
@@ -280,23 +298,56 @@ impl AliyunShareDriver {
                 "阿里分享 drive_id 为空，请先浏览一次分享目录".into(),
             ));
         }
+        let copy_dir = {
+            let d = self.addition.open_copy_dir.trim();
+            if d.is_empty() {
+                "root".to_string()
+            } else {
+                d.to_string()
+            }
+        };
         let client = Self::http_client()?;
+        // The copy request needs our own drive id up front.
+        let own_drive = self.ensure_own_drive_id(&client, &access).await?;
         let mut result = Vec::new();
         for file in files {
             if file.isdir || file.id.is_empty() {
                 continue;
             }
+            // 1) copy the share file into the own drive
+            let copy_json = self
+                .copy_to_own(&client, &access, &share_token, &drive_id, &own_drive, &copy_dir, file)
+                .await?;
+            // The copy response may already carry the destination file id.
+            let mut own_file_id = copy_json
+                .get("tasks")
+                .and_then(|t| t.as_array())
+                .and_then(|tasks| tasks.first())
+                .and_then(|task| task["file_id"].as_str())
+                .unwrap_or("")
+                .to_string();
+            // 2) otherwise poll the own-drive target dir for the copied file
+            if own_file_id.is_empty() {
+                let (fid, _did) = self
+                    .find_copied(&client, &access, &own_drive, &copy_dir, file)
+                    .await?;
+                own_file_id = fid;
+            }
+            if own_drive.is_empty() || own_file_id.is_empty() {
+                return Err(AppError::CloudDrive(format!(
+                    "分享文件 {} 转存后未能在自己的云盘定位到目标文件",
+                    file.name
+                )));
+            }
+            // 3) download from the own drive (web-domain endpoint)
             let resp = client
-                .post("https://api.alipan.com/v2/file/get_share_link_download_url")
-                .header("Authorization", format!("Bearer\t{access}"))
-                .header("x-share-token", &share_token)
-                .header("X-Canary", CANARY_HEADER_VALUE)
+                .post("https://api.alipan.com/v2/file/get_download_url")
+                .header("Authorization", format!("Bearer {access}"))
+                .header("X-Canary", "client=windows,app=adrive,version=v6.0.0")
                 .header("Referer", "https://www.alipan.com/")
                 .json(&serde_json::json!({
-                    "drive_id": drive_id,
-                    "file_id": file.id,
-                    "expire_sec": 600,
-                    "share_id": self.addition.share_id,
+                    "drive_id": own_drive,
+                    "file_id": own_file_id,
                 }))
                 .send()
                 .await
@@ -323,10 +374,10 @@ impl AliyunShareDriver {
                     text.chars().take(300).collect::<String>()
                 ))
             })?;
-            let url = json["download_url"]
+            let url = json["url"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| AppError::CloudDrive(format!("阿里分享未返回 {} 的下载地址", file.name)))?;
+                .ok_or_else(|| AppError::CloudDrive(format!("阿里云盘未返回 {} 的下载地址", file.name)))?;
             // The CDN requires the alipan Referer.
             let headers = vec!["Referer: https://www.alipan.com/".to_string()];
             result.push((file.clone(), url, headers));
@@ -335,6 +386,146 @@ impl AliyunShareDriver {
             return Err(AppError::CloudDrive("未能获取任何阿里分享文件的下载地址".into()));
         }
         Ok(result)
+    }
+
+    /// The user's own drive id (copy target), cached in `own_drive_id`.
+    async fn ensure_own_drive_id(
+        &mut self,
+        client: &reqwest::Client,
+        access: &str,
+    ) -> Result<String, AppError> {
+        if !self.addition.own_drive_id.is_empty() {
+            return Ok(self.addition.own_drive_id.clone());
+        }
+        let resp = client
+            .post("https://api.alipan.com/v2/user/get_drive_info")
+            .header("Authorization", format!("Bearer {access}"))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("获取自己的云盘信息失败: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("读取云盘信息响应失败: {e}")))?;
+        if !status.is_success() {
+            let body = text.chars().take(300).collect::<String>();
+            return Err(AppError::CloudDrive(format!(
+                "获取自己的云盘信息失败（HTTP {status}）：{body}"
+            )));
+        }
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| AppError::CloudDrive(format!("解析云盘信息响应失败: {e}")))?;
+        let drive_id = json["default_drive_id"]
+            .as_str()
+            .or_else(|| json["drive_id"].as_str())
+            .ok_or_else(|| {
+                AppError::CloudDrive(format!(
+                    "云盘信息响应缺少 drive_id: {}",
+                    text.chars().take(300).collect::<String>()
+                ))
+            })?
+            .to_string();
+        self.addition.own_drive_id = drive_id.clone();
+        Ok(drive_id)
+    }
+
+    /// v2/file/copy: 把分享文件转存到自己的云盘（网页域 token）。
+    async fn copy_to_own(
+        &self,
+        client: &reqwest::Client,
+        access: &str,
+        share_token: &str,
+        share_drive: &str,
+        own_drive: &str,
+        to_parent: &str,
+        file: &crate::commands::CloudDriveFile,
+    ) -> Result<serde_json::Value, AppError> {
+        let resp = client
+            .post("https://api.alipan.com/v2/file/copy")
+            .header("Authorization", format!("Bearer\t{access}"))
+            .header("x-share-token", share_token)
+            .header("X-Canary", CANARY_HEADER_VALUE)
+            .json(&serde_json::json!({
+                "drive_id": share_drive,
+                "file_id": file.id,
+                "to_drive_id": own_drive,
+                "to_parent_file_id": to_parent,
+            }))
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("转存 {} 到云盘失败: {e}", file.name)))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("读取转存响应失败: {e}")))?;
+        if !status.is_success() {
+            let body = text.chars().take(300).collect::<String>();
+            return Err(AppError::CloudDrive(format!(
+                "转存 {} 失败（HTTP {status}）：{body}",
+                file.name
+            )));
+        }
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| AppError::CloudDrive(format!("解析转存响应失败: {e}")))?;
+        Ok(json)
+    }
+
+    /// Poll the own-drive copy dir until a file matching name+size appears.
+    async fn find_copied(
+        &self,
+        client: &reqwest::Client,
+        access: &str,
+        own_drive: &str,
+        copy_dir: &str,
+        file: &crate::commands::CloudDriveFile,
+    ) -> Result<(String, String), AppError> {
+        // The copy is async; poll the target dir up to ~30s.
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let resp = client
+                .post("https://api.alipan.com/v2/file/list")
+                .header("Authorization", format!("Bearer {access}"))
+                .json(&serde_json::json!({
+                    "drive_id": own_drive,
+                    "parent_file_id": copy_dir,
+                    "limit": 200,
+                    "marker": "",
+                }))
+                .send()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("请求自己的云盘目录失败: {e}")))?;
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| AppError::CloudDrive(format!("读取云盘目录响应失败: {e}")))?;
+            if !status.is_success() {
+                let body = text.chars().take(300).collect::<String>();
+                return Err(AppError::CloudDrive(format!(
+                    "请求自己的云盘目录失败（HTTP {status}）：{body}"
+                )));
+            }
+            let json: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| AppError::CloudDrive(format!("解析云盘目录响应失败: {e}")))?;
+            let items = json["items"].as_array().cloned().unwrap_or_default();
+            for item in items {
+                if item["name"].as_str() == Some(file.name.as_str())
+                    && item["size"].as_u64().unwrap_or(0) == file.size
+                {
+                    return Ok((
+                        item["file_id"].as_str().unwrap_or("").to_string(),
+                        item["drive_id"].as_str().unwrap_or("").to_string(),
+                    ));
+                }
+            }
+        }
+        Err(AppError::CloudDrive(format!(
+            "分享文件 {} 转存到云盘超时（30s 内未在目标目录找到）",
+            file.name
+        )))
     }
 }
 

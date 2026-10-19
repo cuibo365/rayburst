@@ -167,11 +167,13 @@ impl AliyunShare115Driver {
                 share_url: self.addition.share_url.clone(),
                 share_id: self.addition.share_id.clone(),
                 share_pwd: self.addition.share_pwd.clone(),
+                open_copy_dir: self.addition.open_copy_dir.clone(),
                 access_token: self.addition.share_access_token.clone(),
                 token_expires_at: self.addition.share_access_expires_at,
                 share_token: self.addition.share_token.clone(),
                 share_token_expires_at: self.addition.share_token_expires_at,
                 drive_id: self.addition.drive_id.clone(),
+                own_drive_id: String::new(),
             },
         }
     }
