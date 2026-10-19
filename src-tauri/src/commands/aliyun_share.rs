@@ -106,8 +106,12 @@ pub struct AliyunShareDriver {
 
 impl AliyunShareDriver {
     /// Transient driver for 提取分享: borrows the source storage's
-    /// credentials (refresh_token, token caches, own_drive_id) but replaces
-    /// the share fields with the just-entered URL; never persists.
+    /// credentials (refresh_token, access_token cache, own_drive_id) but
+    /// replaces the share fields with the just-entered URL; never persists.
+    ///
+    /// Share-scoped caches (`share_token`, `drive_id`) are cleared: a cached
+    /// token belongs to the source storage's share and would 400 against the
+    /// new share_id ("share_id doesn't match share_token").
     pub fn transient(storage: &AliyunShareAddition, share_url: &str, passcode: &str) -> Self {
         let mut addition = storage.clone();
         let (sid, spwd) = AliyunShareAddition::parse_share_url(share_url);
@@ -118,6 +122,9 @@ impl AliyunShareDriver {
         } else {
             spwd
         };
+        addition.share_token = String::new();
+        addition.share_token_expires_at = 0;
+        addition.drive_id = String::new();
         Self {
             id: 0,
             addition,
