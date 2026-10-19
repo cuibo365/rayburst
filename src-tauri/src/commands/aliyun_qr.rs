@@ -11,6 +11,7 @@
 //! authCode via `aliyun_qr_exchange` → refresh_token + its refresh endpoint.
 
 use crate::error::AppError;
+use base64::Engine as _;
 
 const MESSENSE_QR: &str = "https://aliyundrive-oauth.messense.me/oauth/authorize/qrcode";
 const MESSENSE_TOKEN: &str = "https://aliyundrive-oauth.messense.me/oauth/access_token";
@@ -265,4 +266,131 @@ pub async fn aliyun_qr_exchange(
         refresh_token,
         token_url,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Web-domain token QR login (alistgo official endpoints).
+//
+// Unlike the open-token flow above (OAuth clients), the *web* refresh_token
+// (used by aliyun_share / aliyun_share_115) is obtained through Aliyun's
+// passport web login. alistgo hosts both endpoints so no passport session is
+// needed here:
+//   create: GET  api.alistgo.com/alist/ali/qr           → {t, ck, codeContent}
+//   poll:   POST api.alistgo.com/alist/ali/ck  {ck, t}  → qrCodeStatus;
+//           on CONFIRMED the response's bizExt (base64, GBK-encoded JSON)
+//           carries `pds_login_result.refreshToken` directly.
+// ---------------------------------------------------------------------------
+
+const ALISTGO_WEB_QR: &str = "https://api.alistgo.com/alist/ali/qr";
+const ALISTGO_WEB_CK: &str = "https://api.alistgo.com/alist/ali/ck";
+
+/// QR login session for the web-domain token flow.
+#[derive(serde::Serialize)]
+pub struct AliyunWebQrCreated {
+    pub ck: String,
+    pub t: String,
+    pub qrcode_svg: String,
+}
+
+/// Poll result. `state`: success / pending / expired / error.
+#[derive(serde::Serialize)]
+pub struct AliyunWebQrStatus {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Step 1: create a web-domain QR login session via alistgo.
+#[tauri::command]
+pub async fn aliyun_web_qr_create() -> Result<AliyunWebQrCreated, AppError> {
+    let client = http_client()?;
+    let resp = client
+        .get(ALISTGO_WEB_QR)
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("请求 alistgo 网页 token 二维码失败: {e}")))?;
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("解析 alistgo 网页 token 二维码响应失败: {e}")))?;
+    if !status.is_success() {
+        return Err(AppError::CloudDrive(format!(
+            "alistgo 网页 token 二维码生成失败（HTTP {status}）：{}",
+            json.get("message").and_then(|m| m.as_str()).unwrap_or("")
+        )));
+    }
+    let data = &json["content"]["data"];
+    let ck = data["ck"]
+        .as_str()
+        .ok_or_else(|| AppError::CloudDrive("网页 token 二维码响应缺少 ck".into()))?
+        .to_string();
+    let t = data["t"].as_i64().map(|v| v.to_string()).ok_or_else(|| {
+        AppError::CloudDrive("网页 token 二维码响应缺少 t".into())
+    })?;
+    let code = data["codeContent"]
+        .as_str()
+        .ok_or_else(|| AppError::CloudDrive("网页 token 二维码响应缺少 codeContent".into()))?;
+    let qrcode_svg = render_qr_svg(code)?;
+    Ok(AliyunWebQrCreated { ck, t, qrcode_svg })
+}
+
+/// Step 2: poll the web-domain scan status. On success returns the web
+/// refresh_token decoded from the response's bizExt (base64 → GBK → JSON).
+#[tauri::command]
+pub async fn aliyun_web_qr_status(ck: String, t: String) -> Result<AliyunWebQrStatus, AppError> {
+    let client = http_client()?;
+    let resp = client
+        .post(ALISTGO_WEB_CK)
+        .json(&serde_json::json!({ "ck": ck, "t": t }))
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("查询网页 token 扫码状态失败: {e}")))?;
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("解析网页 token 扫码状态响应失败: {e}")))?;
+    if !status.is_success() {
+        return Err(AppError::CloudDrive(format!(
+            "查询网页 token 扫码状态失败（HTTP {status}）：{}",
+            json.get("message").and_then(|m| m.as_str()).unwrap_or("")
+        )));
+    }
+    let data = &json["content"]["data"];
+    let st = data["qrCodeStatus"].as_str().unwrap_or("");
+    match st {
+        "CONFIRMED" => {
+            let b64 = data["bizExt"].as_str().ok_or_else(|| {
+                AppError::CloudDrive("扫码成功但响应缺少 bizExt".into())
+            })?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| AppError::CloudDrive(format!("bizExt base64 解码失败: {e}")))?;
+            let (text, _, _) = encoding_rs::GBK.decode(&bytes);
+            let biz: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| AppError::CloudDrive(format!("bizExt JSON 解析失败: {e}")))?;
+            let refresh_token = biz["pds_login_result"]["refreshToken"]
+                .as_str()
+                .ok_or_else(|| AppError::CloudDrive("bizExt 中缺少 refreshToken".into()))?
+                .to_string();
+            Ok(AliyunWebQrStatus {
+                state: "success".into(),
+                refresh_token: Some(refresh_token),
+                message: None,
+            })
+        }
+        "EXPIRED" => Ok(AliyunWebQrStatus {
+            state: "expired".into(),
+            refresh_token: None,
+            message: Some("二维码已过期".into()),
+        }),
+        _ => Ok(AliyunWebQrStatus {
+            state: "pending".into(),
+            refresh_token: None,
+            message: None,
+        }),
+    }
 }

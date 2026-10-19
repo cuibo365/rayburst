@@ -795,6 +795,8 @@ pub fn run() {
             commands::aliyun_qr_create,
             commands::aliyun_qr_status,
             commands::aliyun_qr_exchange,
+            commands::aliyun_web_qr_create,
+            commands::aliyun_web_qr_status,
         ])
         // ── Window event interception ─────────────────────────────────
         //

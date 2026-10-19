@@ -58,6 +58,7 @@ igd-next = { version = "0.15", features = ["aio_tokio"] }
 ipnet = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies"] }
 qrcode = "0.14"
+encoding_rs = "0.8"
 num-bigint = "0.4"
 rand = "0.8"
 base64 = "0.22"

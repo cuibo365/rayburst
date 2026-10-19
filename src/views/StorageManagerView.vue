@@ -337,6 +337,7 @@ function openQrcode(kind: 'quark' | 'm115' = 'quark') {
 
 onUnmounted(stopQrPoll)
 onUnmounted(stopAliyunQrPoll)
+onUnmounted(stopAliyunWebQrPoll)
 
 async function openAuthorize() {
   const clientId = form.value.client_id.trim() || DEFAULT_CLIENT_ID
@@ -349,16 +350,7 @@ async function openAuthorize() {
 }
 
 /// Aliyun Drive refresh_token: jump to the alistgo official token page.
-async function openAliyunTokenPage() {
-  try {
-    await openUrl('https://alistgo.com/zh/tool/aliyundrive/request.html')
-  } catch (e) {
-    message.error(`打开授权页面失败：${String(e)}`)
-  }
-}
-
-// --- Aliyun Drive open token QR login (xiaoya dual channel) ---
-// The channel (messense / xiaoya) determines which hosted OAuth issues the
+// --- Aliyun Drive open token QR login (xiaoya dual channel) ---// The channel (messense / xiaoya) determines which hosted OAuth issues the
 // refresh_token; the issuer's refresh endpoint is stored into
 // `oauth_token_url` so runtime refresh stays in-channel.
 const aliyunQrDialog = ref(false)
@@ -426,6 +418,70 @@ function openAliyunQr() {
   aliyunQrError.value = ''
   aliyunQrDialog.value = true
   void genAliyunQrcode()
+}
+
+// --- Aliyun web-domain token QR login (alistgo official endpoints) ---
+// Used by the share drivers (aliyun_share / aliyun_share_115): the web
+// refresh_token differs from the open token and is obtained via alistgo's
+// passport-based /alist/ali/qr + /alist/ali/ck.
+const aliyunWebQrDialog = ref(false)
+const aliyunWebQrSvg = ref('')
+const aliyunWebQrCk = ref('')
+const aliyunWebQrT = ref('')
+const aliyunWebQrError = ref('')
+const aliyunWebQrGenerating = ref(false)
+let aliyunWebQrTimer: number | null = null
+
+function stopAliyunWebQrPoll() {
+  if (aliyunWebQrTimer !== null) {
+    window.clearInterval(aliyunWebQrTimer)
+    aliyunWebQrTimer = null
+  }
+}
+
+async function genAliyunWebQrcode() {
+  stopAliyunWebQrPoll()
+  aliyunWebQrError.value = ''
+  aliyunWebQrGenerating.value = true
+  try {
+    const r = await invoke<{ ck: string; t: string; qrcode_svg: string }>('aliyun_web_qr_create')
+    aliyunWebQrCk.value = r.ck
+    aliyunWebQrT.value = r.t
+    aliyunWebQrSvg.value = r.qrcode_svg
+    aliyunWebQrTimer = window.setInterval(async () => {
+      if (!aliyunWebQrCk.value || !aliyunWebQrT.value) return
+      try {
+        const s = await invoke<{ state: string; refresh_token?: string; message?: string }>('aliyun_web_qr_status', {
+          ck: aliyunWebQrCk.value,
+          t: aliyunWebQrT.value,
+        })
+        if (s.state === 'success' && s.refresh_token) {
+          form.value.refresh_token = s.refresh_token
+          stopAliyunWebQrPoll()
+          aliyunWebQrDialog.value = false
+          message.success('扫码成功，refresh_token 已自动填入')
+        } else if (s.state === 'expired' || s.state === 'error') {
+          stopAliyunWebQrPoll()
+          aliyunWebQrError.value = s.message || '二维码已失效，请刷新重试'
+        }
+      } catch {
+        // transient network error: keep polling
+      }
+    }, 2000)
+  } catch (err) {
+    aliyunWebQrError.value = errMsg(err)
+  } finally {
+    aliyunWebQrGenerating.value = false
+  }
+}
+
+function openAliyunWebQr() {
+  aliyunWebQrSvg.value = ''
+  aliyunWebQrCk.value = ''
+  aliyunWebQrT.value = ''
+  aliyunWebQrError.value = ''
+  aliyunWebQrDialog.value = true
+  void genAliyunWebQrcode()
 }
 
 function buildAddition(): Record<string, unknown> {
@@ -987,7 +1043,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
-                <NButton size="small" type="primary" @click="openAliyunTokenPage">扫码获取</NButton>
+                <NButton size="small" type="primary" @click="openAliyunWebQr">扫码获取</NButton>
               </div>
             </template>
             <NInput
@@ -997,6 +1053,11 @@ onMounted(async () => {
               placeholder="粘贴你自己的阿里云盘 refresh_token（分享文件需转存到你的盘）"
             />
           </NFormItem>
+          <p class="storage-quark-tip">
+            <strong>获取方式：</strong>点右上角「扫码获取」，用阿里云盘 App 扫码后自动回填网页版 refresh_token；
+            此驱动需要<strong>网页版 token</strong>（与「阿里云盘」驱动使用的 open token 不同）， 也可浏览器登录
+            <code>alipan.com</code> 后在开发者工具中复制。
+          </p>
           <p class="storage-quark-tip">
             <strong>注意：</strong>分享文件无 SHA1，下载前会先 <code>v2/file/copy</code> 转存到你自己的阿里云盘
             （默认根目录，见下方「转存目录」），再从自己的盘取直链下载。
@@ -1093,6 +1154,38 @@ onMounted(async () => {
         <div class="storage-dialog-actions">
           <NButton secondary @click="aliyunQrDialog = false">关闭</NButton>
           <NButton secondary :loading="aliyunQrGenerating" @click="genAliyunQrcode">刷新二维码</NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 阿里云盘网页 token 扫码（alistgo 官方） -->
+    <NModal
+      v-model:show="aliyunWebQrDialog"
+      preset="card"
+      title="阿里云盘扫码获取 refresh_token"
+      class="storage-dialog"
+      :style="{ width: '360px' }"
+      :bordered="false"
+      @after-leave="stopAliyunWebQrPoll"
+    >
+      <p class="storage-quark-tip">
+        请使用<strong>阿里云盘 App</strong> 扫码登录（手机端需已登录账号），扫码确认后自动回填网页版 refresh_token。<br />此驱动使用<strong
+          >网页版 token</strong
+        >（与「阿里云盘」驱动的 open token 不同）。
+      </p>
+      <div class="qr-box">
+        <img
+          v-if="aliyunWebQrSvg"
+          :src="'data:image/svg+xml;utf8,' + encodeURIComponent(aliyunWebQrSvg)"
+          alt="阿里云盘登录二维码"
+        />
+        <NSpin v-else :show="aliyunWebQrGenerating" class="qr-loading" />
+      </div>
+      <div v-if="aliyunWebQrError" class="qr-error">{{ aliyunWebQrError }}</div>
+      <template #footer>
+        <div class="storage-dialog-actions">
+          <NButton secondary @click="aliyunWebQrDialog = false">关闭</NButton>
+          <NButton secondary :loading="aliyunWebQrGenerating" @click="genAliyunWebQrcode">刷新二维码</NButton>
         </div>
       </template>
     </NModal>
