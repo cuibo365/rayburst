@@ -302,17 +302,27 @@ impl AliyunShareDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 {} 下载地址失败: {e}", file.name)))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            // Read the body as text first so non-JSON replies (rate-limit /
+            // risk-control HTML pages, empty bodies) surface their real
+            // content instead of a bare "error decoding response body".
+            let text = resp
+                .text()
                 .await
-                .map_err(|e| AppError::CloudDrive(format!("解析 {} 下载响应失败: {e}", file.name)))?;
+                .map_err(|e| AppError::CloudDrive(format!("读取 {} 下载响应失败: {e}", file.name)))?;
             if !status.is_success() {
+                let body = text.chars().take(300).collect::<String>();
                 return Err(AppError::CloudDrive(format!(
-                    "获取 {} 下载地址失败（HTTP {status}）：{}",
-                    file.name,
-                    json.get("message").and_then(|m| m.as_str()).unwrap_or("")
+                    "获取 {} 下载地址失败（HTTP {status}）：{body}",
+                    file.name
                 )));
             }
+            let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+                AppError::CloudDrive(format!(
+                    "解析 {} 下载响应失败: {e}（响应内容: {}）",
+                    file.name,
+                    text.chars().take(300).collect::<String>()
+                ))
+            })?;
             let url = json["download_url"]
                 .as_str()
                 .map(str::to_string)
