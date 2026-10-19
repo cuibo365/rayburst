@@ -100,19 +100,28 @@ pub struct AliyunShareDriver {
     pub id: i64,
     pub addition: AliyunShareAddition,
     /// Transient (提取分享) drivers must not write their in-memory share
-    /// fields or token caches back into the source storage.
+    /// fields back into the source storage; account-scoped fields
+    /// (refresh_token rotation) are still merged back.
     pub no_persist: bool,
+    /// Source storage's original addition (transient only); used to merge
+    /// account-scoped writes without touching share fields.
+    pub original: Option<AliyunShareAddition>,
 }
 
 impl AliyunShareDriver {
     /// Transient driver for 提取分享: borrows the source storage's
     /// credentials (refresh_token, access_token cache, own_drive_id) but
-    /// replaces the share fields with the just-entered URL; never persists.
+    /// replaces the share fields with the just-entered URL.
     ///
     /// Share-scoped caches (`share_token`, `drive_id`) are cleared: a cached
     /// token belongs to the source storage's share and would 400 against the
     /// new share_id ("share_id doesn't match share_token").
-    pub fn transient(storage: &AliyunShareAddition, share_url: &str, passcode: &str) -> Self {
+    pub fn transient(
+        storage_id: i64,
+        storage: &AliyunShareAddition,
+        share_url: &str,
+        passcode: &str,
+    ) -> Self {
         let mut addition = storage.clone();
         let (sid, spwd) = AliyunShareAddition::parse_share_url(share_url);
         addition.share_url = share_url.to_string();
@@ -126,9 +135,10 @@ impl AliyunShareDriver {
         addition.share_token_expires_at = 0;
         addition.drive_id = String::new();
         Self {
-            id: 0,
+            id: storage_id,
             addition,
             no_persist: true,
+            original: Some(storage.clone()),
         }
     }
 
@@ -148,7 +158,18 @@ impl AliyunShareDriver {
     }
 
     pub async fn persist(&self, db: &Database) -> Result<(), AppError> {
-        if self.no_persist {
+        if let Some(orig) = &self.original {
+            // transient（提取分享）：只回写账号级字段。refresh_token 每次
+            // 刷新都会旋转且旧值立即作废，若不存回源存储，源存储（及共用
+            // 同一 refresh_token 的其他驱动）会在下次刷新时失效。
+            let mut saved = orig.clone();
+            saved.refresh_token = self.addition.refresh_token.clone();
+            saved.access_token = self.addition.access_token.clone();
+            saved.token_expires_at = self.addition.token_expires_at;
+            if !self.addition.own_drive_id.is_empty() {
+                saved.own_drive_id = self.addition.own_drive_id.clone();
+            }
+            db.update_storage_addition(self.id, &saved.to_json()?).await?;
             return Ok(());
         }
         db.update_storage_addition(self.id, &self.addition.to_json()?)

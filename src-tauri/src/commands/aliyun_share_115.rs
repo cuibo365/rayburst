@@ -133,6 +133,7 @@ impl AliyunShare115Driver {
         AliyunShareDriver {
             id: self.id,
             no_persist: false,
+            original: None,
             addition: AliyunShareAddition {
                 refresh_token: self.addition.refresh_token.clone(),
                 share_url: self.addition.share_url.clone(),

@@ -2148,7 +2148,8 @@ pub async fn cloud_drive_share_list(
         }
         "aliyun_share" => {
             let addition = AliyunShareAddition::parse(&storage.addition)?;
-            let mut driver = AliyunShareDriver::transient(&addition, &share_url, &passcode);
+            let mut driver =
+                AliyunShareDriver::transient(storage.id, &addition, &share_url, &passcode);
             driver.list(&db.0, &path).await
         }
         other => Err(AppError::CloudDrive(format!(
@@ -2199,7 +2200,8 @@ pub async fn cloud_drive_share_download(
         }
         "aliyun_share" => {
             let addition = AliyunShareAddition::parse(&storage.addition)?;
-            let mut driver = AliyunShareDriver::transient(&addition, &share_url, &passcode);
+            let mut driver =
+                AliyunShareDriver::transient(storage.id, &addition, &share_url, &passcode);
             let files = expand_aliyun_share_folders(&mut driver, &db.0, files).await?;
             if files.is_empty() {
                 return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
