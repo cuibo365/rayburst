@@ -86,9 +86,12 @@ const shareLabel = computed(() => {
 const shareKind = computed(() => {
   const s = storages.value.find((x) => x.id === shareSourceId.value)
   const d = s?.driver ?? 'quark_share'
-  return d === 'm115' || d === 'm115_share' ? 'm115' : d
+  if (d === 'm115' || d === 'm115_share') return 'm115'
+  if (d === 'aliyun_share') return 'aliyun_share'
+  return d
 })
 const isM115Share = computed(() => shareKind.value === 'm115')
+const isAliyunShareTransient = computed(() => shareKind.value === 'aliyun_share')
 
 const isRoot = computed(() => activeStorage.value === null && shareSession.value === null)
 const currentPath = computed(() => {
@@ -522,7 +525,8 @@ onMounted(async () => {
                     s.driver === 'quark' ||
                     s.driver === 'quark_share' ||
                     s.driver === 'm115' ||
-                    s.driver === 'm115_share'
+                    s.driver === 'm115_share' ||
+                    s.driver === 'aliyun_share'
                   "
                   size="tiny"
                   secondary
@@ -578,21 +582,30 @@ onMounted(async () => {
     <NModal
       v-model:show="shareDialog"
       preset="dialog"
-      :title="isM115Share ? '提取 115 分享' : '提取夸克分享'"
+      :title="isM115Share ? '提取 115 分享' : isAliyunShareTransient ? '提取阿里分享' : '提取夸克分享'"
       positive-text="进入"
       negative-text="取消"
       :loading="shareSaving"
       @positive-click="confirmShare"
     >
       <div class="share-dialog-tip">
-        直接浏览该分享并下载，无需添加存储；下载复用所选存储的 Cookie。
+        直接浏览该分享并下载，无需添加存储；下载复用所选存储的登录态。
         <template v-if="isM115Share">115 分享下载需要账号 Cookie。</template>
+        <template v-else-if="isAliyunShareTransient"
+          >阿里分享下载会先转存到所选存储账号的云盘（转存目录见存储配置）再下载。</template
+        >
       </div>
       <NForm label-placement="top">
         <NFormItem label="分享地址">
           <NInput
             v-model:value="shareForm.shareUrl"
-            :placeholder="isM115Share ? 'https://115.com/s/xxxx?password=提取码' : 'https://pan.quark.cn/s/xxxx'"
+            :placeholder="
+              isM115Share
+                ? 'https://115.com/s/xxxx?password=提取码'
+                : isAliyunShareTransient
+                  ? 'https://www.alipan.com/s/xxxx（可带 ?pwd= 提取码）'
+                  : 'https://pan.quark.cn/s/xxxx'
+            "
           />
         </NFormItem>
         <NFormItem :label="isM115Share ? '提取码（非必填）' : '提取码（非必填）'">

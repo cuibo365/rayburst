@@ -99,9 +99,32 @@ impl AliyunShareAddition {
 pub struct AliyunShareDriver {
     pub id: i64,
     pub addition: AliyunShareAddition,
+    /// Transient (提取分享) drivers must not write their in-memory share
+    /// fields or token caches back into the source storage.
+    pub no_persist: bool,
 }
 
 impl AliyunShareDriver {
+    /// Transient driver for 提取分享: borrows the source storage's
+    /// credentials (refresh_token, token caches, own_drive_id) but replaces
+    /// the share fields with the just-entered URL; never persists.
+    pub fn transient(storage: &AliyunShareAddition, share_url: &str, passcode: &str) -> Self {
+        let mut addition = storage.clone();
+        let (sid, spwd) = AliyunShareAddition::parse_share_url(share_url);
+        addition.share_url = share_url.to_string();
+        addition.share_id = sid;
+        addition.share_pwd = if spwd.is_empty() {
+            passcode.to_string()
+        } else {
+            spwd
+        };
+        Self {
+            id: 0,
+            addition,
+            no_persist: true,
+        }
+    }
+
     fn http_client() -> Result<reqwest::Client, AppError> {
         reqwest::Client::builder()
             .user_agent(ALIYUN_UA)
@@ -118,12 +141,18 @@ impl AliyunShareDriver {
     }
 
     pub async fn persist(&self, db: &Database) -> Result<(), AppError> {
+        if self.no_persist {
+            return Ok(());
+        }
         db.update_storage_addition(self.id, &self.addition.to_json()?)
             .await?;
         Ok(())
     }
 
     pub async fn set_status(&self, db: &Database, status: &str) -> Result<(), AppError> {
+        if self.no_persist {
+            return Ok(());
+        }
         db.set_storage_status(self.id, status).await
     }
 
