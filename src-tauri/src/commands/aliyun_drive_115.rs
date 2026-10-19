@@ -149,7 +149,7 @@ impl AliyunDrive115Driver {
         let mut open = self.open_driver();
         let r = open.list(db, file_id).await;
         self.sync_open_cache(&open);
-        if let Ok(files) = &r {
+        if r.is_ok() {
             if self.addition.user_id == 0 {
                 self.addition.user_id = AliyunDrive115Addition::parse_uid(&self.addition.cookie);
                 self.persist(db).await?;

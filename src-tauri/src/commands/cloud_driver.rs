@@ -341,6 +341,7 @@ impl CloudDriver {
                     id: storage.id,
                     addition,
                     no_persist: false,
+                    original: None,
                 }))
             }
             "aliyun_drive_115" => Ok(CloudDriver::AliyunDrive115(AliyunDrive115Driver {

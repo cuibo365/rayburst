@@ -169,7 +169,7 @@ impl AliyunShare115Driver {
         let mut share = self.share_driver();
         let r = share.list(db, file_id).await;
         self.sync_caches(&share);
-        if let Ok(files) = &r {
+        if r.is_ok() {
             if self.addition.user_id == 0 {
                 self.addition.user_id = AliyunShare115Addition::parse_uid(&self.addition.cookie);
                 self.persist(db).await?;

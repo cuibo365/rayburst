@@ -15,7 +15,7 @@ use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyIn
 use aes::Aes128;
 use base64::Engine;
 use p224::ecdh::EphemeralSecret;
-use p224::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
+use p224::elliptic_curve::sec1::ToEncodedPoint;
 use p224::PublicKey;
 use rand::RngCore;
 use sha1::Sha1;
