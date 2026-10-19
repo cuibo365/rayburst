@@ -56,7 +56,9 @@ const M115_PAGE_SIZE: i64 = 1000;
 /// 115 QR login endpoints (SDK qrcode.go).
 const M115_QRCODE_TOKEN_URL: &str = "https://qrcodeapi.115.com/api/1.0/web/1.0/token";
 const M115_QRCODE_STATUS_URL: &str = "https://qrcodeapi.115.com/get/status/";
-const M115_QRCODE_LOGIN_URL: &str = "https://passportapi.115.com/app/1.0/web/1.0/login/qrcode";
+/// QR login device sources supported by 115 (mirrors alist's 115 driver / 115driver crate).
+const M115_QR_SOURCES: [&str; 7] = ["web", "android", "ios", "tv", "alipaymini", "wechatmini", "qandroid"];
+const M115_QR_DEFAULT_SOURCE: &str = "alipaymini";
 
 /// Latest 115Browser version (fetched once; falls back to `M115_UA_FALLBACK`).
 static M115_APP_VER: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
@@ -2437,6 +2439,7 @@ pub struct M115QrcodeCreated {
     pub uid: String,
     pub time: i64,
     pub sign: String,
+    pub source: String,
 }
 
 /// Poll result. `state`: success / pending / scanned / expired / canceled / error.
@@ -2451,7 +2454,16 @@ pub struct M115QrcodeStatus {
 
 /// Step 1: create a 115 QR login session and render the QR code as SVG.
 #[tauri::command]
-pub async fn cloud_drive_115_qrcode_create() -> Result<M115QrcodeCreated, AppError> {
+pub async fn cloud_drive_115_qrcode_create(
+    source: Option<String>,
+) -> Result<M115QrcodeCreated, AppError> {
+    let source = source.unwrap_or_else(|| M115_QR_DEFAULT_SOURCE.to_string());
+    if !M115_QR_SOURCES.contains(&source.as_str()) {
+        return Err(AppError::CloudDrive(format!(
+            "不支持的 115 扫码设备源：{source}（可选：{}）",
+            M115_QR_SOURCES.join(" / ")
+        )));
+    }
     let client = reqwest::Client::builder()
         .user_agent(format!("Mozilla/5.0 115Browser/{M115_UA_FALLBACK}"))
         .timeout(std::time::Duration::from_secs(15))
@@ -2491,17 +2503,26 @@ pub async fn cloud_drive_115_qrcode_create() -> Result<M115QrcodeCreated, AppErr
         uid,
         time,
         sign,
+        source,
     })
 }
 
 /// Step 2: poll the scan status; on success returns the merged cookie string
-/// (`UID=..;CID=..;SEID=..;KID=..`) from the login endpoint.
+/// (`UID=..;CID=..;SEID=..;KID=..`) from the login endpoint. The login
+/// endpoint URL embeds the device source (`app/1.0/{source}/1.0/login/qrcode`).
 #[tauri::command]
 pub async fn cloud_drive_115_qrcode_status(
     uid: String,
     time: i64,
     sign: String,
+    source: String,
 ) -> Result<M115QrcodeStatus, AppError> {
+    if !M115_QR_SOURCES.contains(&source.as_str()) {
+        return Err(AppError::CloudDrive(format!(
+            "不支持的 115 扫码设备源：{source}（可选：{}）",
+            M115_QR_SOURCES.join(" / ")
+        )));
+    }
     let client = reqwest::Client::builder()
         .user_agent(format!("Mozilla/5.0 115Browser/{M115_UA_FALLBACK}"))
         .timeout(std::time::Duration::from_secs(15))
@@ -2527,11 +2548,14 @@ pub async fn cloud_drive_115_qrcode_status(
     let status = json["data"]["status"].as_i64().unwrap_or(-1);
     match status {
         2 => {
-            // 已确认：用 account=uid 换取登录凭据
+            // 已确认：用 account=uid 换取登录凭据（登录接口按设备源区分路径与 app 参数）
+            let login_url = format!(
+                "https://passportapi.115.com/app/1.0/{source}/1.0/login/qrcode"
+            );
             let login_resp = client
-                .post(M115_QRCODE_LOGIN_URL)
+                .post(&login_url)
                 .header("Referer", M115_REFERER)
-                .form(&[("account", uid.as_str()), ("app", "web")])
+                .form(&[("account", uid.as_str()), ("app", source.as_str())])
                 .send()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("换取 115 登录凭据失败: {e}")))?;

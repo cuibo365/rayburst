@@ -4,7 +4,7 @@
  * Adding a Baidu Netdisk storage fills client_id/client_secret with defaults;
  * the refresh_token field carries an "获取" button that opens the OAuth page.
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   NButton,
   NCheckbox,
@@ -249,6 +249,16 @@ const qrTime = ref(0)
 const qrSign = ref('')
 const qrError = ref('')
 const qrGenerating = ref(false)
+const qrSource = ref('alipaymini')
+const m115QrSourceOptions = [
+  { label: '支付宝小程序（默认）', value: 'alipaymini' },
+  { label: '网页', value: 'web' },
+  { label: '安卓', value: 'android' },
+  { label: 'iOS', value: 'ios' },
+  { label: '电视', value: 'tv' },
+  { label: '微信小程序', value: 'wechatmini' },
+  { label: 'QQ 安卓', value: 'qandroid' },
+]
 let qrTimer: number | null = null
 
 function stopQrPoll() {
@@ -266,6 +276,7 @@ async function genQrcode() {
     if (qrKind.value === 'm115') {
       const r = await invoke<{ qrcode_svg: string; uid: string; time: number; sign: string }>(
         'cloud_drive_115_qrcode_create',
+        { source: qrSource.value },
       )
       qrUid.value = r.uid
       qrTime.value = r.time
@@ -276,7 +287,7 @@ async function genQrcode() {
         try {
           const r = await invoke<{ state: string; cookie?: string; message?: string }>(
             'cloud_drive_115_qrcode_status',
-            { uid: qrUid.value, time: qrTime.value, sign: qrSign.value },
+            { uid: qrUid.value, time: qrTime.value, sign: qrSign.value, source: qrSource.value },
           )
           if (r.state === 'success' && r.cookie) {
             form.value.cookie = r.cookie
@@ -334,6 +345,13 @@ function openQrcode(kind: 'quark' | 'm115' = 'quark') {
   qrDialog.value = true
   void genQrcode()
 }
+
+// 切换 115 扫码设备源时自动重新生成二维码（二维码会话与设备源无关，但重新生成更稳）。
+watch(qrSource, () => {
+  if (qrDialog.value && qrKind.value === 'm115') {
+    void genQrcode()
+  }
+})
 
 onUnmounted(stopQrPoll)
 onUnmounted(stopAliyunQrPoll)
@@ -1203,12 +1221,17 @@ onMounted(async () => {
       <p class="storage-quark-tip">
         <template v-if="qrKind === 'm115'">
           请使用<strong>115 App</strong> 扫码登录（手机端需已登录账号），扫码后请在手机上确认登录，成功后自动填入
-          Cookie。
+          Cookie。<br />
+          <strong>注意：</strong>115 Cookie <strong>相同扫码设备仅最后一次可用</strong>——同一设备源每次扫码都会使
+          之前获取的 Cookie 失效（不同设备源互不影响），请扫码后立即使用或确认。
         </template>
         <template v-else>
           请使用<strong>夸克 App</strong> 扫码登录（手机端需已登录账号），扫码成功后将自动填入 Cookie。
         </template>
       </p>
+      <NFormItem v-if="qrKind === 'm115'" label="扫码设备">
+        <NSelect v-model:value="qrSource" :options="m115QrSourceOptions" size="small" />
+      </NFormItem>
       <div class="qr-box">
         <img
           v-if="qrSvg"
