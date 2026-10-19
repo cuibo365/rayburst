@@ -378,12 +378,12 @@ async function confirmShare() {
     shareDialog.value = false
     activeStorage.value = null
     browseStack.value = []
-    rootPath.value = '0'
+    rootPath.value = isAliyunShareTransient.value ? 'root' : '0'
     files.value = []
     visibleCount.value = PAGE_SIZE
     selected.value = new Set()
     loadError.value = ''
-    await loadDir('0')
+    await loadDir(rootPath.value)
   } catch (err) {
     message.error(errMsg(err))
   } finally {

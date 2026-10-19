@@ -248,7 +248,7 @@ impl AliyunShareDriver {
         let access = self.ensure_access_token(db).await?;
         let share_token = self.ensure_share_token(db).await?;
         let client = Self::http_client()?;
-        let parent = if file_id.is_empty() || file_id == "root" {
+        let parent = if file_id.is_empty() || file_id == "root" || file_id == "0" {
             "root".to_string()
         } else {
             file_id.to_string()
