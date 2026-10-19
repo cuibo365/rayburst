@@ -1,5 +1,6 @@
 pub mod aria2;
 pub mod aliyun_drive_115;
+pub mod aliyun_qr;
 pub mod aliyun_open;
 pub mod aliyun_share;
 pub mod aliyun_share_115;

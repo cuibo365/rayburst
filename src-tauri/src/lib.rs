@@ -792,6 +792,9 @@ pub fn run() {
             commands::cloud_drive_quark_qrcode_status,
             commands::cloud_drive_115_qrcode_create,
             commands::cloud_drive_115_qrcode_status,
+            commands::aliyun_qr_create,
+            commands::aliyun_qr_status,
+            commands::aliyun_qr_exchange,
         ])
         // ── Window event interception ─────────────────────────────────
         //

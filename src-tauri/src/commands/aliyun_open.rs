@@ -150,31 +150,28 @@ impl AliyunOpenDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 token 响应失败: {e}")))?;
         } else if !self.addition.oauth_token_url.is_empty() {
-            // Hosted renew (alist-compatible). alist first GETs
-            // `?refresh_ui=<token>&server_use=true&driver_txt=alicloud_qr`; alistgo
-            // now rejects that form with "Incorrect GrantType", so on any error
-            // body we fall back to POSTing the token to the same URL (alist
-            // `refreshTokenWithPost`): {client_id, client_secret, grant_type,
-            // refresh_token} — client_id/secret may be empty.
-            let get_url = format!(
-                "{}?refresh_ui={}&server_use=true&driver_txt=alicloud_qr",
-                self.addition.oauth_token_url,
-                urlencoding::encode(&self.addition.refresh_token)
-            );
-            let resp = client
-                .get(&get_url)
-                .send()
-                .await
-                .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
-            let get_json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
-            if get_json["access_token"].as_str().is_some() {
-                json = get_json;
-            } else {
+            let renew_url = self.addition.oauth_token_url.clone();
+            let renew_lower = renew_url.to_ascii_lowercase();
+            if renew_lower.contains("messense.me") {
+                // messense hosted OAuth: standard token endpoint, no client fields.
                 let resp = client
-                    .post(self.addition.oauth_token_url.as_str())
+                    .post(&renew_url)
+                    .json(&serde_json::json!({
+                        "grant_type": "refresh_token",
+                        "refresh_token": self.addition.refresh_token,
+                    }))
+                    .send()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("调用 messense 刷新接口失败: {e}")))?;
+                json = resp
+                    .json()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("解析 messense 刷新响应失败: {e}")))?;
+            } else if renew_lower.contains("xiaoya.pro") {
+                // xiaoya hosted OAuth: same shape as its auth_code exchange
+                // (empty client fields included).
+                let resp = client
+                    .post(&renew_url)
                     .json(&serde_json::json!({
                         "client_id": self.addition.client_id,
                         "client_secret": self.addition.client_secret,
@@ -183,11 +180,51 @@ impl AliyunOpenDriver {
                     }))
                     .send()
                     .await
-                    .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
+                    .map_err(|e| AppError::CloudDrive(format!("调用 xiaoya 刷新接口失败: {e}")))?;
                 json = resp
                     .json()
                     .await
+                    .map_err(|e| AppError::CloudDrive(format!("解析 xiaoya 刷新响应失败: {e}")))?;
+            } else {
+                // Hosted renew (alist-compatible). alist first GETs
+                // `?refresh_ui=<token>&server_use=true&driver_txt=alicloud_qr`; alistgo
+                // now rejects that form with "Incorrect GrantType", so on any error
+                // body we fall back to POSTing the token to the same URL (alist
+                // `refreshTokenWithPost`): {client_id, client_secret, grant_type,
+                // refresh_token} — client_id/secret may be empty.
+                let get_url = format!(
+                    "{}?refresh_ui={}&server_use=true&driver_txt=alicloud_qr",
+                    renew_url,
+                    urlencoding::encode(&self.addition.refresh_token)
+                );
+                let resp = client
+                    .get(&get_url)
+                    .send()
+                    .await
+                    .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
+                let get_json: serde_json::Value = resp
+                    .json()
+                    .await
                     .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
+                if get_json["access_token"].as_str().is_some() {
+                    json = get_json;
+                } else {
+                    let resp = client
+                        .post(&renew_url)
+                        .json(&serde_json::json!({
+                            "client_id": self.addition.client_id,
+                            "client_secret": self.addition.client_secret,
+                            "grant_type": "refresh_token",
+                            "refresh_token": self.addition.refresh_token,
+                        }))
+                        .send()
+                        .await
+                        .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
+                    json = resp
+                        .json()
+                        .await
+                        .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
+                }
             }
         } else {
             return Err(AppError::CloudDrive(

@@ -336,6 +336,7 @@ function openQrcode(kind: 'quark' | 'm115' = 'quark') {
 }
 
 onUnmounted(stopQrPoll)
+onUnmounted(stopAliyunQrPoll)
 
 async function openAuthorize() {
   const clientId = form.value.client_id.trim() || DEFAULT_CLIENT_ID
@@ -354,6 +355,77 @@ async function openAliyunTokenPage() {
   } catch (e) {
     message.error(`打开授权页面失败：${String(e)}`)
   }
+}
+
+// --- Aliyun Drive open token QR login (xiaoya dual channel) ---
+// The channel (messense / xiaoya) determines which hosted OAuth issues the
+// refresh_token; the issuer's refresh endpoint is stored into
+// `oauth_token_url` so runtime refresh stays in-channel.
+const aliyunQrDialog = ref(false)
+const aliyunQrChannel = ref<'messense' | 'xiaoya'>('messense')
+const aliyunQrSvg = ref('')
+const aliyunQrSid = ref('')
+const aliyunQrError = ref('')
+const aliyunQrGenerating = ref(false)
+let aliyunQrTimer: number | null = null
+
+function stopAliyunQrPoll() {
+  if (aliyunQrTimer !== null) {
+    window.clearInterval(aliyunQrTimer)
+    aliyunQrTimer = null
+  }
+}
+
+async function genAliyunQrcode() {
+  stopAliyunQrPoll()
+  aliyunQrError.value = ''
+  aliyunQrGenerating.value = true
+  try {
+    const r = await invoke<{ sid: string; qr_code_url: string; qrcode_svg: string }>('aliyun_qr_create', {
+      channel: aliyunQrChannel.value,
+    })
+    aliyunQrSid.value = r.sid
+    aliyunQrSvg.value = r.qrcode_svg
+    aliyunQrTimer = window.setInterval(async () => {
+      if (!aliyunQrSid.value) return
+      try {
+        const s = await invoke<{ state: string; auth_code?: string; message?: string }>('aliyun_qr_status', {
+          sid: aliyunQrSid.value,
+        })
+        if (s.state === 'success' && s.auth_code) {
+          const t = await invoke<{ refresh_token: string; token_url: string }>('aliyun_qr_exchange', {
+            channel: aliyunQrChannel.value,
+            authCode: s.auth_code,
+          })
+          form.value.refresh_token = t.refresh_token
+          if (isAliyunDrive.value || isAliyunDrive115.value) {
+            form.value.oauth_token_url = t.token_url
+          }
+          stopAliyunQrPoll()
+          aliyunQrDialog.value = false
+          message.success('扫码成功，refresh_token 已自动填入')
+        } else if (s.state === 'expired' || s.state === 'error') {
+          stopAliyunQrPoll()
+          aliyunQrError.value = s.message || '二维码已失效，请刷新重试'
+        }
+      } catch {
+        // transient network error: keep polling
+      }
+    }, 2000)
+  } catch (err) {
+    aliyunQrError.value = errMsg(err)
+  } finally {
+    aliyunQrGenerating.value = false
+  }
+}
+
+function openAliyunQr() {
+  aliyunQrChannel.value = 'messense'
+  aliyunQrSvg.value = ''
+  aliyunQrSid.value = ''
+  aliyunQrError.value = ''
+  aliyunQrDialog.value = true
+  void genAliyunQrcode()
 }
 
 function buildAddition(): Record<string, unknown> {
@@ -840,7 +912,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
-                <NButton size="small" type="primary" @click="openAliyunTokenPage">扫码获取</NButton>
+                <NButton size="small" type="primary" @click="openAliyunQr">扫码获取</NButton>
               </div>
             </template>
             <NInput
@@ -851,9 +923,9 @@ onMounted(async () => {
             />
           </NFormItem>
           <p class="storage-quark-tip">
-            <strong>获取方式：</strong>点右上角「扫码获取」，在 alist 官方 token 页
-            （<code>alistgo.com/zh/tool/aliyundrive/request.html</code>）扫码授权后复制 refresh_token 粘贴至此；
-            也可参考 alist「阿里云盘 Open」在 <code>https://openapi.alipan.com/oauth/authorize</code> 授权获取。
+            <strong>获取方式：</strong>点右上角「扫码获取」，用阿里云盘 App 扫码授权后自动回填 refresh_token
+            与刷新地址（通道可选 messense.me / xiaoya.pro，token 由所选通道签发， 后续刷新走同一通道）；也可在
+            <code>https://openapi.alipan.com/oauth/authorize</code> 授权获取后手动粘贴。
           </p>
           <NSpace :size="12">
             <NFormItem label="client_id" class="storage-flex-item">
@@ -977,6 +1049,50 @@ onMounted(async () => {
         <div class="storage-dialog-actions">
           <NButton secondary @click="showDialog = false">取消</NButton>
           <NButton type="primary" :loading="saving" @click="save">保存</NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 阿里云盘 open token 扫码（小雅双通道） -->
+    <NModal
+      v-model:show="aliyunQrDialog"
+      preset="card"
+      title="阿里云盘扫码获取 refresh_token"
+      class="storage-dialog"
+      :style="{ width: '360px' }"
+      :bordered="false"
+      @after-leave="stopAliyunQrPoll"
+    >
+      <p class="storage-quark-tip">
+        请使用<strong>阿里云盘 App</strong> 扫码登录（手机端需已登录账号），扫码确认后自动回填 refresh_token
+        与刷新地址。<br />「通道」决定 token 由哪个托管方签发，后续刷新将走同一通道。
+      </p>
+      <div class="qr-channel-row">
+        <span class="qr-channel-label">扫码通道</span>
+        <NSelect
+          v-model:value="aliyunQrChannel"
+          size="small"
+          :options="[
+            { label: 'messense.me（默认）', value: 'messense' },
+            { label: 'xiaoya.pro', value: 'xiaoya' },
+          ]"
+          style="width: 190px"
+          @update:value="genAliyunQrcode"
+        />
+      </div>
+      <div class="qr-box">
+        <img
+          v-if="aliyunQrSvg"
+          :src="'data:image/svg+xml;utf8,' + encodeURIComponent(aliyunQrSvg)"
+          alt="阿里云盘登录二维码"
+        />
+        <NSpin v-else :show="aliyunQrGenerating" class="qr-loading" />
+      </div>
+      <div v-if="aliyunQrError" class="qr-error">{{ aliyunQrError }}</div>
+      <template #footer>
+        <div class="storage-dialog-actions">
+          <NButton secondary @click="aliyunQrDialog = false">关闭</NButton>
+          <NButton secondary :loading="aliyunQrGenerating" @click="genAliyunQrcode">刷新二维码</NButton>
         </div>
       </template>
     </NModal>
@@ -1117,6 +1233,16 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--m3-error, #e5484d);
   margin-top: 4px;
+}
+.qr-channel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 2px;
+}
+.qr-channel-label {
+  font-size: 12px;
+  color: var(--m3-on-surface-variant, #5f6368);
 }
 .storage-quark-tip {
   margin: -4px 0 10px;
