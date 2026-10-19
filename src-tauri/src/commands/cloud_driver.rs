@@ -1501,6 +1501,7 @@ impl M115ShareDriver {
                 share_code,
                 receive_code: if rc.is_empty() { receive_code } else { rc },
                 cookie,
+                qr_source: None,
             },
         }
     }
