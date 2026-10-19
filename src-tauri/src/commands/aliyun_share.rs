@@ -316,24 +316,47 @@ impl AliyunShareDriver {
             }
             // 1) copy the share file into the own drive
             let copy_json = self
-                .copy_to_own(&client, &access, &share_token, &drive_id, &own_drive, &copy_dir, file)
+                .copy_to_own(
+                    &client,
+                    &access,
+                    &share_token,
+                    &self.addition.share_id,
+                    &drive_id,
+                    &own_drive,
+                    &copy_dir,
+                    file,
+                )
                 .await?;
-            // The copy response may already carry the destination file id.
-            let mut own_file_id = copy_json
-                .get("tasks")
-                .and_then(|t| t.as_array())
-                .and_then(|tasks| tasks.first())
-                .and_then(|task| task["file_id"].as_str())
-                .unwrap_or("")
-                .to_string();
+            // The 202 copy response carries the destination file id and
+            // drive id at the top level (older replies use `tasks[0]`).
+            let mut own_file_id = copy_json["file_id"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_default();
+            let mut own_file_drive = copy_json["drive_id"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| own_drive.clone());
+            if own_file_id.is_empty() {
+                own_file_id = copy_json
+                    .get("tasks")
+                    .and_then(|t| t.as_array())
+                    .and_then(|tasks| tasks.first())
+                    .and_then(|task| task["file_id"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+            }
             // 2) otherwise poll the own-drive target dir for the copied file
             if own_file_id.is_empty() {
-                let (fid, _did) = self
+                let (fid, did) = self
                     .find_copied(&client, &access, &own_drive, &copy_dir, file)
                     .await?;
                 own_file_id = fid;
+                if !did.is_empty() {
+                    own_file_drive = did;
+                }
             }
-            if own_drive.is_empty() || own_file_id.is_empty() {
+            if own_file_drive.is_empty() || own_file_id.is_empty() {
                 return Err(AppError::CloudDrive(format!(
                     "分享文件 {} 转存后未能在自己的云盘定位到目标文件",
                     file.name
@@ -346,7 +369,7 @@ impl AliyunShareDriver {
                 .header("X-Canary", "client=windows,app=adrive,version=v6.0.0")
                 .header("Referer", "https://www.alipan.com/")
                 .json(&serde_json::json!({
-                    "drive_id": own_drive,
+                    "drive_id": own_file_drive,
                     "file_id": own_file_id,
                 }))
                 .send()
@@ -397,8 +420,12 @@ impl AliyunShareDriver {
         if !self.addition.own_drive_id.is_empty() {
             return Ok(self.addition.own_drive_id.clone());
         }
+        // `user.aliyundrive.com/v2/user/get` is the only web-domain endpoint
+        // that returns the full drive set (api.* hosts only expose
+        // default_drive_id). Prefer the resource drive — that is the drive
+        // the web app's "全部文件" view and user-provided folder ids live in.
         let resp = client
-            .post("https://api.alipan.com/v2/user/get_drive_info")
+            .post("https://user.aliyundrive.com/v2/user/get")
             .header("Authorization", format!("Bearer {access}"))
             .json(&serde_json::json!({}))
             .send()
@@ -417,8 +444,9 @@ impl AliyunShareDriver {
         }
         let json: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| AppError::CloudDrive(format!("解析云盘信息响应失败: {e}")))?;
-        let drive_id = json["default_drive_id"]
+        let drive_id = json["resource_drive_id"]
             .as_str()
+            .or_else(|| json["default_drive_id"].as_str())
             .or_else(|| json["drive_id"].as_str())
             .ok_or_else(|| {
                 AppError::CloudDrive(format!(
@@ -432,11 +460,15 @@ impl AliyunShareDriver {
     }
 
     /// v2/file/copy: 把分享文件转存到自己的云盘（网页域 token）。
+    ///
+    /// The `share_id` field in the body is required (without it the API
+    /// rejects with `InvalidParameterNotMatch.ShareId`).
     async fn copy_to_own(
         &self,
         client: &reqwest::Client,
         access: &str,
         share_token: &str,
+        share_id: &str,
         share_drive: &str,
         own_drive: &str,
         to_parent: &str,
@@ -450,6 +482,7 @@ impl AliyunShareDriver {
             .json(&serde_json::json!({
                 "drive_id": share_drive,
                 "file_id": file.id,
+                "share_id": share_id,
                 "to_drive_id": own_drive,
                 "to_parent_file_id": to_parent,
             }))

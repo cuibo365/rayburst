@@ -366,6 +366,7 @@ impl AliyunShare115Driver {
             .json(&serde_json::json!({
                 "drive_id": share_drive,
                 "file_id": file_id,
+                "share_id": share_id,
                 "to_drive_id": own_drive,
                 "to_parent_file_id": to_parent,
             }))

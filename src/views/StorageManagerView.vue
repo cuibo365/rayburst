@@ -115,6 +115,7 @@ const form = ref<{
   user_key: string
   dir_id: string
   open_copy_dir: string
+  own_drive_id: string
   remark: string
 }>({
   mount_path: '',
@@ -135,6 +136,7 @@ const form = ref<{
   user_key: '',
   dir_id: '0',
   open_copy_dir: 'root',
+  own_drive_id: '',
   remark: '',
 })
 
@@ -170,6 +172,7 @@ function resetForm() {
     user_key: '',
     dir_id: '0',
     open_copy_dir: 'root',
+    own_drive_id: '',
     remark: '',
   }
 }
@@ -212,6 +215,7 @@ function openEdit(s: CloudStorage) {
     user_key: (addition.user_key as string) ?? '',
     dir_id: (addition.dir_id as string) ?? '0',
     open_copy_dir: (addition.open_copy_dir as string) ?? 'root',
+    own_drive_id: (addition.own_drive_id as string) ?? '',
     remark: s.remark,
   }
   showDialog.value = true
@@ -397,6 +401,7 @@ function buildAddition(): Record<string, unknown> {
       share_code: form.value.share_code.trim(),
       share_pwd: form.value.passcode.trim(),
       open_copy_dir: form.value.open_copy_dir.trim() || 'root',
+      own_drive_id: form.value.own_drive_id.trim(),
     }
   }
   if (form.value.driver === 'aliyun_drive_115') {
@@ -930,6 +935,12 @@ onMounted(async () => {
           </p>
           <NFormItem v-if="isAliyunShare" label="转存目录（open_copy_dir）">
             <NInput v-model:value="form.open_copy_dir" placeholder="root = 网盘根目录，也可填文件夹 file_id" />
+          </NFormItem>
+          <NFormItem v-if="isAliyunShare" label="自己的网盘 drive_id（可选）">
+            <NInput
+              v-model:value="form.own_drive_id"
+              placeholder="留空自动取资源库盘 resource_drive_id（推荐）；特殊需要时填其他盘 id"
+            />
           </NFormItem>
           <template v-if="isAliyunShare115">
             <NSpace :size="12">
