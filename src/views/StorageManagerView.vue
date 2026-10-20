@@ -1445,6 +1445,7 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+  flex: 1;
 }
 .qr-box {
   display: flex;
@@ -1502,9 +1503,11 @@ onMounted(async () => {
 
 <!--
   NModal teleports its content to <body>, so scoped styles can never reach the
-  dialog's inner DOM. These global rules (no .storage-dialog prefix, matched by
-  :has on the cookie-label row) force the label row and its text wrapper to full
-  width so 同步获取/扫码获取 sit flush right.
+  dialog's inner DOM. These global rules are matched by :has on the
+  cookie-label row. naive wraps the label slot in an inline
+  .n-form-item-label__text span; display:contents removes that box so the
+  .storage-cookie-label flex row becomes a direct child of the full-width
+  label and its space-between pushes the buttons flush right.
 -->
 <style>
 .n-form-item-label:has(.storage-cookie-label) {
@@ -1513,8 +1516,6 @@ onMounted(async () => {
   width: 100% !important;
 }
 .n-form-item-label__text:has(.storage-cookie-label) {
-  display: flex;
-  align-items: center;
-  width: 100% !important;
+  display: contents !important;
 }
 </style>
