@@ -180,8 +180,6 @@ function resetForm() {
 
 function openAdd() {
   resetForm()
-  // 新增默认驱动即百度网盘：onDriverChange 不会触发，这里显式带入凭据。
-  applyCredDefaults()
   showDialog.value = true
 }
 
@@ -266,10 +264,6 @@ const credentialGroups: CredentialGroup[] = [
   },
 ]
 
-const isAddMode = computed(() => editingId.value === null)
-const credGroupsForDriver = computed(() => credentialGroups.filter((g) => g.drivers.includes(form.value.driver)))
-const credSelected = ref<Record<string, number | undefined>>({})
-
 function credCandidates(g: CredentialGroup): CloudStorage[] {
   return storages.value
     .filter((s) => !s.disabled && g.drivers.includes(s.driver))
@@ -297,26 +291,26 @@ function applyCredSource(g: CredentialGroup, storage: CloudStorage | null) {
   }
 }
 
-function onCredChange(g: CredentialGroup, v: number | null) {
-  credSelected.value[g.key] = v ?? undefined
-  if (v === null) return
-  const s = storages.value.find((x) => x.id === v)
-  if (s) applyCredSource(g, s)
+// 「同步获取」弹窗：选择组内来源存储，确认后填入对应字段。
+const syncOpen = ref(false)
+const syncGroup = ref<CredentialGroup | null>(null)
+const syncSelected = ref<number | null>(null)
+const syncOptions = computed(() => (syncGroup.value ? credOptions(syncGroup.value) : []))
+
+function openSync(key: string) {
+  const g = credentialGroups.find((x) => x.key === key)
+  if (!g) return
+  syncGroup.value = g
+  syncSelected.value = null
+  syncOpen.value = true
 }
 
-// 新增模式下：为当前驱动的每个凭据组默认选最近创建的来源并自动带入。
-function applyCredDefaults() {
-  if (editingId.value !== null) return
-  for (const g of credGroupsForDriver.value) {
-    const cands = credCandidates(g)
-    if (!cands.length) {
-      credSelected.value[g.key] = undefined
-      continue
-    }
-    const latest = cands[cands.length - 1]
-    credSelected.value[g.key] = latest.id
-    applyCredSource(g, latest)
-  }
+function applySync() {
+  const g = syncGroup.value
+  if (!g || syncSelected.value === null) return
+  const s = storages.value.find((x) => x.id === syncSelected.value)
+  if (s) applyCredSource(g, s)
+  syncOpen.value = false
 }
 
 function onDriverChange() {
@@ -335,7 +329,6 @@ function onDriverChange() {
   form.value.dir_id = '0'
   form.value.open_copy_dir = 'root'
   form.value.qr_source = 'alipaymini'
-  applyCredDefaults()
 }
 
 // --- qrcode login (扫码获取 Cookie): quark / 115 ---
@@ -949,24 +942,12 @@ onMounted(async () => {
           <NSelect v-model:value="form.driver" :options="[...DRIVERS]" @update:value="onDriverChange" />
         </NFormItem>
 
-        <template v-if="isAddMode && credGroupsForDriver.length">
-          <NFormItem v-for="g in credGroupsForDriver" :key="g.key" :label="g.label">
-            <NSelect
-              :value="credSelected[g.key]"
-              :options="credOptions(g)"
-              clearable
-              size="small"
-              placeholder="不选择（手动填写）"
-              @update:value="(v: number | null) => onCredChange(g, v)"
-            />
-          </NFormItem>
-        </template>
-
         <template v-if="isBaidu">
           <NFormItem label="refresh_token">
             <template #label>
               <div class="storage-cookie-label">
                 <span>refresh_token</span>
+                <NButton size="small" @click="openSync('baidu')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openAuthorize">扫码获取</NButton>
               </div>
             </template>
@@ -995,6 +976,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
+                <NButton size="small" @click="openSync('quark')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('quark')">扫码获取</NButton>
               </div>
             </template>
@@ -1021,6 +1003,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
+                <NButton size="small" @click="openSync('quark')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('quark')">扫码获取</NButton>
               </div>
             </template>
@@ -1047,6 +1030,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
+                <NButton size="small" @click="openSync('m115')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
               </div>
             </template>
@@ -1085,6 +1069,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
+                <NButton size="small" @click="openSync('m115')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
               </div>
             </template>
@@ -1113,6 +1098,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
+                <NButton size="small" @click="openSync('aliyunOpen')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openAliyunQr">扫码获取</NButton>
               </div>
             </template>
@@ -1150,6 +1136,7 @@ onMounted(async () => {
               <template #label>
                 <div class="storage-cookie-label">
                   <span>115 Cookie</span>
+                  <NButton size="small" @click="openSync('m115')">同步获取</NButton>
                   <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
                 </div>
               </template>
@@ -1181,6 +1168,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
+                <NButton size="small" @click="openSync('aliyunShare')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openAliyunWebQr">扫码获取</NButton>
               </div>
             </template>
@@ -1224,6 +1212,7 @@ onMounted(async () => {
               <template #label>
                 <div class="storage-cookie-label">
                   <span>115 Cookie</span>
+                  <NButton size="small" @click="openSync('m115')">同步获取</NButton>
                   <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
                 </div>
               </template>
@@ -1254,6 +1243,27 @@ onMounted(async () => {
         <div class="storage-dialog-actions">
           <NButton secondary @click="showDialog = false">取消</NButton>
           <NButton type="primary" :loading="saving" @click="save">保存</NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 同步获取：选择组内来源存储，填入对应凭据字段 -->
+    <NModal
+      v-model:show="syncOpen"
+      preset="card"
+      title="选择账号来源"
+      class="storage-dialog"
+      :style="{ width: '420px' }"
+      :bordered="false"
+    >
+      <p class="storage-quark-tip">
+        {{ syncGroup?.label }}：选择已有存储后自动填入对应字段（挂载路径、根目录等存储特有字段不受影响）。
+      </p>
+      <NSelect v-model:value="syncSelected" :options="syncOptions" clearable placeholder="选择来源存储" />
+      <template #footer>
+        <div class="storage-dialog-actions">
+          <NButton secondary @click="syncOpen = false">取消</NButton>
+          <NButton type="primary" :disabled="syncSelected === null" @click="applySync">确定</NButton>
         </div>
       </template>
     </NModal>
