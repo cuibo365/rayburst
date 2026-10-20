@@ -38,12 +38,13 @@ pub struct AliyunDrive115Addition {
     pub qr_channel: String,
     /// 115 web-session cookie (UID/CID/SEID[/KID]).
     pub cookie: String,
-    /// Optional 115 user key (rarely needed; empty is fine).
-    #[serde(default)]
-    pub user_key: String,
     /// 115 target dir for the rapid-uploaded file (`0` = drive root).
     #[serde(default = "default_115_dir")]
     pub dir_id: String,
+    /// 115 QR device source recorded at scan time (same convention as the
+    /// standalone 115 driver; empty = default alipaymini).
+    #[serde(default)]
+    pub qr_source: String,
     // ---- runtime caches (persisted) ----
     #[serde(default)]
     pub access_token: String,
@@ -178,7 +179,8 @@ impl AliyunDrive115Driver {
         let ua = crate::commands::cloud_driver::m115_ua().await;
         let cookie = self.addition.cookie.clone();
         let dir_id = self.addition.dir_id.trim().to_string();
-        let user_key = self.addition.user_key.clone();
+        // user_key 为空即可（115 秒传签名对 userkey 不敏感，实测无需填写）。
+        let user_key = String::new();
         // Refresh the embedded open-driver token once up front (rotates and
         // persists); the sign-proof reader below uses it for Range downloads.
         let mut open = self.open_driver();

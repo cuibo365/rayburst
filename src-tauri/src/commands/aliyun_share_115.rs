@@ -49,12 +49,13 @@ pub struct AliyunShare115Addition {
     pub share_pwd: String,
     /// 115 web-session cookie.
     pub cookie: String,
-    /// Optional 115 user key.
-    #[serde(default)]
-    pub user_key: String,
     /// 115 target dir for the rapid-uploaded file (`0` = drive root).
     #[serde(default = "default_115_dir")]
     pub dir_id: String,
+    /// 115 QR device source recorded at scan time (same convention as the
+    /// standalone 115 driver; empty = default alipaymini).
+    #[serde(default)]
+    pub qr_source: String,
     // ---- runtime caches (persisted) ----
     /// share-domain access_token (auth.alipan.com/v2/account/token).
     #[serde(default)]
@@ -257,7 +258,8 @@ impl AliyunShare115Driver {
 
         let cookie = self.addition.cookie.clone();
         let dir_id = self.addition.dir_id.trim().to_string();
-        let user_key = self.addition.user_key.clone();
+        // user_key 为空即可（115 秒传签名对 userkey 不敏感，实测无需填写）。
+        let user_key = String::new();
         let share_id = self.addition.share_id.clone();
         // The share drive id is learned from listing; prefer the value the
         // browsed files already carry, else learn it from one root listing.

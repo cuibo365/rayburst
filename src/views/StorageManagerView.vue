@@ -112,7 +112,6 @@ const form = ref<{
   share_code: string
   passcode: string
   receive_code: string
-  user_key: string
   dir_id: string
   open_copy_dir: string
   own_drive_id: string
@@ -134,11 +133,10 @@ const form = ref<{
   share_code: '',
   passcode: '',
   receive_code: '',
-  user_key: '',
   dir_id: '0',
   open_copy_dir: 'root',
   own_drive_id: '',
-  qr_source: '',
+  qr_source: 'alipaymini',
   remark: '',
 })
 
@@ -172,11 +170,10 @@ function resetForm() {
     share_code: '',
     passcode: '',
     receive_code: '',
-    user_key: '',
     dir_id: '0',
     open_copy_dir: 'root',
     own_drive_id: '',
-    qr_source: '',
+    qr_source: 'alipaymini',
     remark: '',
   }
 }
@@ -216,11 +213,10 @@ function openEdit(s: CloudStorage) {
     share_code: (addition.share_code as string) ?? '',
     passcode: (addition.passcode as string) ?? '',
     receive_code: (addition.receive_code as string) ?? '',
-    user_key: (addition.user_key as string) ?? '',
     dir_id: (addition.dir_id as string) ?? '0',
     open_copy_dir: (addition.open_copy_dir as string) ?? 'root',
     own_drive_id: (addition.own_drive_id as string) ?? '',
-    qr_source: (addition.qr_source as string) ?? '',
+    qr_source: (addition.qr_source as string) ?? 'alipaymini',
     remark: s.remark,
   }
   showDialog.value = true
@@ -239,10 +235,9 @@ function onDriverChange() {
   form.value.share_url = ''
   form.value.passcode = ''
   form.value.receive_code = ''
-  form.value.user_key = ''
   form.value.dir_id = '0'
   form.value.open_copy_dir = 'root'
-  form.value.qr_source = ''
+  form.value.qr_source = 'alipaymini'
 }
 
 // --- qrcode login (扫码获取 Cookie): quark / 115 ---
@@ -561,8 +556,8 @@ function buildAddition(): Record<string, unknown> {
       root_folder_id: form.value.root_folder_id.trim() || 'root',
       drive_type: form.value.drive_type.trim() || 'resource',
       cookie: form.value.cookie.trim(),
-      user_key: form.value.user_key.trim(),
       dir_id: form.value.dir_id.trim() || '0',
+      qr_source: form.value.qr_source.trim() || undefined,
     }
   }
   if (form.value.driver === 'aliyun_share_115') {
@@ -573,8 +568,8 @@ function buildAddition(): Record<string, unknown> {
       share_code: form.value.share_code.trim(),
       share_pwd: form.value.passcode.trim(),
       cookie: form.value.cookie.trim(),
-      user_key: form.value.user_key.trim(),
       dir_id: form.value.dir_id.trim() || '0',
+      qr_source: form.value.qr_source.trim() || undefined,
     }
   }
   return {
@@ -992,7 +987,7 @@ onMounted(async () => {
         </template>
 
         <template v-else-if="isAliyunDrive || isAliyunDrive115">
-          <NFormItem label="扫码通道（修改通道必须重新扫码）">
+          <NFormItem label="扫码通道（扫码通道和refresh_token必须对应）">
             <NSelect
               v-model:value="form.qr_channel"
               :options="[
@@ -1014,7 +1009,7 @@ onMounted(async () => {
               v-model:value="form.refresh_token"
               type="textarea"
               :autosize="{ minRows: 2, maxRows: 4 }"
-              placeholder="粘贴阿里云盘开放平台 refresh_token（网页授权后获取，形如 1A2B... 较长）"
+              placeholder="开发平台 refresh_token，长度335位"
             />
           </NFormItem>
           <NFormItem label="云盘类型（drive_type）">
@@ -1031,12 +1026,27 @@ onMounted(async () => {
             <NInput v-model:value="form.root_folder_id" placeholder="root = 网盘根目录，也可填具体文件夹 file_id" />
           </NFormItem>
           <template v-if="isAliyunDrive115">
+            <NFormItem label="扫码设备（相同设备仅最新 Cookie 生效）">
+              <NSelect
+                v-model:value="form.qr_source"
+                :options="m115QrSourceOptions"
+                clearable
+                size="small"
+                placeholder="未选择（默认 115生活·支付宝小程序）"
+              />
+            </NFormItem>
             <NFormItem label="115 Cookie">
+              <template #label>
+                <div class="storage-cookie-label">
+                  <span>115 Cookie</span>
+                  <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
+                </div>
+              </template>
               <NInput
                 v-model:value="form.cookie"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 6 }"
-                placeholder="登录 115.com 后复制（需含 UID/CID/SEID）"
+                placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
               />
             </NFormItem>
             <NFormItem label="dir_id（闪传落盘目录 cid）">
@@ -1045,13 +1055,7 @@ onMounted(async () => {
                 placeholder="0 = 网盘根目录（下载的文件会以时间戳后缀转存到该目录）"
               />
             </NFormItem>
-            <NFormItem label="user_key（非必填）">
-              <NInput v-model:value="form.user_key" placeholder="115 用户名/手机号，留空自动从 Cookie 解析" />
-            </NFormItem>
-            <p class="storage-quark-tip">
-              下载流程：阿里文件 SHA1 → 115 闪传（秒传命中即取 pickcode）→ 生成 115 CDN 直链。闪传是上传通道，
-              <strong>不消耗 115 云下载配额</strong>；文件会出现在你的 115 网盘「最近接受」，属 115 全局行为。
-            </p>
+            <p class="storage-quark-tip">下载流程：SHA1 → 115 闪传（不耗云下载配额）→ 115 CDN 直链。</p>
           </template>
         </template>
 
@@ -1073,7 +1077,7 @@ onMounted(async () => {
               v-model:value="form.refresh_token"
               type="textarea"
               :autosize="{ minRows: 2, maxRows: 4 }"
-              placeholder="粘贴你自己的阿里云盘 refresh_token（分享文件需转存到你的盘）"
+              placeholder="网页版 refresh_token，长度32位"
             />
           </NFormItem>
           <p class="storage-quark-tip">
@@ -1096,12 +1100,27 @@ onMounted(async () => {
                 placeholder="root = 网盘根目录，也可填文件夹 file_id（留空自动转存到资源库盘根目录）"
               />
             </NFormItem>
+            <NFormItem label="扫码设备（相同设备仅最新 Cookie 生效）">
+              <NSelect
+                v-model:value="form.qr_source"
+                :options="m115QrSourceOptions"
+                clearable
+                size="small"
+                placeholder="未选择（默认 115生活·支付宝小程序）"
+              />
+            </NFormItem>
             <NFormItem label="115 Cookie">
+              <template #label>
+                <div class="storage-cookie-label">
+                  <span>115 Cookie</span>
+                  <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
+                </div>
+              </template>
               <NInput
                 v-model:value="form.cookie"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 6 }"
-                placeholder="登录 115.com 后复制（需含 UID/CID/SEID）"
+                placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
               />
             </NFormItem>
             <NFormItem label="dir_id（闪传落盘目录 cid）">
@@ -1110,12 +1129,8 @@ onMounted(async () => {
                 placeholder="0 = 网盘根目录（下载的文件会以时间戳后缀转存到该目录）"
               />
             </NFormItem>
-            <NFormItem label="user_key（非必填）">
-              <NInput v-model:value="form.user_key" placeholder="115 用户名/手机号，留空自动从 Cookie 解析" />
-            </NFormItem>
             <p class="storage-quark-tip">
-              下载流程：分享文件 → 转存到你阿里云盘 → SHA1 → 115 闪传（不耗云下载配额）→ 115 CDN 直链。文件会出现在
-              115「最近接受」。
+              下载流程：分享文件 → 转存到你阿里云盘 → SHA1 → 115 闪传（不耗云下载配额）→ 115 CDN 直链。
             </p>
           </template>
         </template>
