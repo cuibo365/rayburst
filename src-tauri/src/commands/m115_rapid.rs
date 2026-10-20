@@ -26,6 +26,7 @@ use crate::error::AppError;
 /// Upload endpoint (SDK `ApiUploadInit`).
 const API_UPLOAD_INIT: &str = "https://uplb.115.com/4.0/initupload.php";
 
+
 /// Remote public key (P-224, uncompressed X||Y, 56 bytes) from the SDK.
 const REMOTE_PUB_KEY: [u8; 56] = [
     0x57, 0xA2, 0x92, 0x57, 0xCD, 0x23, 0x20, 0xE5, 0xD6, 0xD1, 0x43, 0x32, 0x2F, 0xA4, 0xBB,
@@ -466,6 +467,78 @@ pub async fn find_pickcode_by_sha1(
         }
     }
     Ok(None)
+}
+
+/// Dynamically resolve the 115 最近接收 directory cid under the drive root;
+/// create it when missing. Used as a fallback when a flash transfer with the
+/// cached cid fails (directory deleted, or the cid differs per account).
+pub async fn resolve_recent_recv_cid(cookie: &str, ua: &str) -> Result<String, AppError> {
+    const RECENT_NAME: &str = "最近接收";
+    // 1) list the drive root and look for 最近接收
+    let url = format!(
+        "{API_DIR_FILES}?cid=0&limit=56&offset=0&o=user_ptime&asc=0&fc_mix=0&show_dir=1&format=json&aid=1"
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("Cookie", cookie)
+        .header("User-Agent", ua)
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("请求 115 根目录失败: {e}")))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("读取 115 根目录失败: {e}")))?;
+    if !status.is_success() {
+        let body = text.chars().take(300).collect::<String>();
+        return Err(AppError::CloudDrive(format!(
+            "请求 115 根目录失败（HTTP {status}）：{body}"
+        )));
+    }
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| AppError::CloudDrive(format!("解析 115 根目录失败: {e}")))?;
+    for item in json["data"].as_array().cloned().unwrap_or_default() {
+        if item["n"].as_str() == Some(RECENT_NAME) {
+            if let Some(cid) = item["cid"].as_str() {
+                return Ok(cid.to_string());
+            }
+        }
+    }
+    // 2) missing → create under the drive root
+    let resp = client
+        .post("https://webapi.115.com/files/add")
+        .header("Cookie", cookie)
+        .header("User-Agent", ua)
+        .form(&[("pid", "0"), ("cname", RECENT_NAME)])
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("创建 115 最近接收目录失败: {e}")))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("读取创建 115 目录响应失败: {e}")))?;
+    if !status.is_success() {
+        let body = text.chars().take(300).collect::<String>();
+        return Err(AppError::CloudDrive(format!(
+            "创建 115 最近接收目录失败（HTTP {status}）：{body}"
+        )));
+    }
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| AppError::CloudDrive(format!("解析创建 115 目录响应失败: {e}")))?;
+    let cid = json["data"]["file_id"]
+        .as_str()
+        .or_else(|| json["file_id"].as_str())
+        .ok_or_else(|| {
+            AppError::CloudDrive(format!(
+                "创建 115 最近接收目录响应缺少 file_id: {}",
+                text.chars().take(300).collect::<String>()
+            ))
+        })?
+        .to_string();
+    Ok(cid)
 }
 
 /// Rapid upload with sign proof, falling back to a SHA1 directory lookup when

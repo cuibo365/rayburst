@@ -112,7 +112,6 @@ const form = ref<{
   share_code: string
   passcode: string
   receive_code: string
-  dir_id: string
   open_copy_dir: string
   own_drive_id: string
   qr_source: string
@@ -133,7 +132,6 @@ const form = ref<{
   share_code: '',
   passcode: '',
   receive_code: '',
-  dir_id: '0',
   open_copy_dir: 'root',
   own_drive_id: '',
   qr_source: 'alipaymini',
@@ -170,7 +168,6 @@ function resetForm() {
     share_code: '',
     passcode: '',
     receive_code: '',
-    dir_id: '0',
     open_copy_dir: 'root',
     own_drive_id: '',
     qr_source: 'alipaymini',
@@ -213,7 +210,6 @@ function openEdit(s: CloudStorage) {
     share_code: (addition.share_code as string) ?? '',
     passcode: (addition.passcode as string) ?? '',
     receive_code: (addition.receive_code as string) ?? '',
-    dir_id: (addition.dir_id as string) ?? '0',
     open_copy_dir: (addition.open_copy_dir as string) ?? 'root',
     own_drive_id: (addition.own_drive_id as string) ?? '',
     qr_source: (addition.qr_source as string) ?? 'alipaymini',
@@ -329,7 +325,6 @@ function onDriverChange() {
   form.value.share_url = ''
   form.value.passcode = ''
   form.value.receive_code = ''
-  form.value.dir_id = '0'
   form.value.open_copy_dir = 'root'
   form.value.qr_source = 'alipaymini'
 }
@@ -650,7 +645,6 @@ function buildAddition(): Record<string, unknown> {
       root_folder_id: form.value.root_folder_id.trim() || 'root',
       drive_type: form.value.drive_type.trim() || 'resource',
       cookie: form.value.cookie.trim(),
-      dir_id: form.value.dir_id.trim() || '0',
       qr_source: form.value.qr_source.trim() || undefined,
     }
   }
@@ -662,7 +656,6 @@ function buildAddition(): Record<string, unknown> {
       share_code: form.value.share_code.trim(),
       share_pwd: form.value.passcode.trim(),
       cookie: form.value.cookie.trim(),
-      dir_id: form.value.dir_id.trim() || '0',
       qr_source: form.value.qr_source.trim() || undefined,
     }
   }
@@ -1150,12 +1143,6 @@ onMounted(async () => {
                 placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
               />
             </NFormItem>
-            <NFormItem label="dir_id（闪传落盘目录 cid）">
-              <NInput
-                v-model:value="form.dir_id"
-                placeholder="0 = 网盘根目录（下载的文件会以时间戳后缀转存到该目录）"
-              />
-            </NFormItem>
             <p class="storage-quark-tip">下载流程：SHA1 → 115 闪传（不耗云下载配额）→ 115 CDN 直链。</p>
           </template>
         </template>
@@ -1215,12 +1202,6 @@ onMounted(async () => {
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 6 }"
                 placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
-              />
-            </NFormItem>
-            <NFormItem label="dir_id（闪传落盘目录 cid）">
-              <NInput
-                v-model:value="form.dir_id"
-                placeholder="0 = 网盘根目录（下载的文件会以时间戳后缀转存到该目录）"
               />
             </NFormItem>
             <p class="storage-quark-tip">

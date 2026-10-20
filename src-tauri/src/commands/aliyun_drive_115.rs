@@ -38,13 +38,14 @@ pub struct AliyunDrive115Addition {
     pub qr_channel: String,
     /// 115 web-session cookie (UID/CID/SEID[/KID]).
     pub cookie: String,
-    /// 115 target dir for the rapid-uploaded file (`0` = drive root).
-    #[serde(default = "default_115_dir")]
-    pub dir_id: String,
     /// 115 QR device source recorded at scan time (same convention as the
     /// standalone 115 driver; empty = default alipaymini).
     #[serde(default)]
     pub qr_source: String,
+    /// Cached 115 flash-transfer target cid. Learned once as the drive root
+    /// (`0` → files land in 最近接收), persisted and reused afterwards.
+    #[serde(default)]
+    pub flash_dir_id: String,
     // ---- runtime caches (persisted) ----
     #[serde(default)]
     pub access_token: String,
@@ -114,7 +115,7 @@ impl AliyunDrive115Driver {
 
     /// Build the embedded Aliyun open driver (shares the token cache).
     /// `no_persist`: never overwrite this storage's addition with the open
-    /// driver's JSON (it would wipe cookie/user_key/dir_id).
+    /// driver's JSON (it would wipe cookie/user_key).
     fn open_driver(&self) -> AliyunOpenDriver {
         AliyunOpenDriver {
             id: self.id,
@@ -178,7 +179,15 @@ impl AliyunDrive115Driver {
         }
         let ua = crate::commands::cloud_driver::m115_ua().await;
         let cookie = self.addition.cookie.clone();
-        let dir_id = self.addition.dir_id.trim().to_string();
+        // 闪传目标 cid 缓存：首次动态解析 115「最近接收」目录（无则自动
+        // 创建）并落库，后续直接复用；与阿里分享转存目录（xiaoya）同一
+        // 套解析+兜底逻辑。
+        if self.addition.flash_dir_id.is_empty() {
+            self.addition.flash_dir_id =
+                crate::commands::m115_rapid::resolve_recent_recv_cid(&cookie, &ua).await?;
+            self.persist(db).await?;
+        }
+        let dir_id = self.addition.flash_dir_id.clone();
         // user_key 为空即可（115 秒传签名对 userkey 不敏感，实测无需填写）。
         let user_key = String::new();
         // Refresh the embedded open-driver token once up front (rotates and
@@ -215,21 +224,12 @@ impl AliyunDrive115Driver {
             };
             // 闪传 + 签名证明 + status=4 回退：命中（7）用阿里 Range 读区间，
             // 被拒（4）时按 SHA1 在目标目录里直接找 pickcode。
-            let pickcode = crate::commands::m115_rapid::rapid_or_find_pickcode(
-                &cookie,
-                &ua,
-                user_id,
-                &user_key,
-                &dir_id,
-                &target_name,
-                file.size,
-                &file.sha1,
-                |range: &str| {
-                    let range = range.to_string();
-                    let token = access_token.clone();
-                    let drive_id = file.drive_id.clone();
-                    let file_id = file.id.clone();
-                    async move {
+            let reader = |range: &str| {
+                let range = range.to_string();
+                let token = access_token.clone();
+                let drive_id = file.drive_id.clone();
+                let file_id = file.id.clone();
+                async move {
                         let client = reqwest::Client::new();
                         let resp = client
                             .post("https://openapi.aliyundrive.com/adrive/v1.0/openFile/getDownloadUrl")
@@ -256,9 +256,28 @@ impl AliyunDrive115Driver {
                             .map_err(|e| AppError::CloudDrive(format!("读取阿里文件校验区间失败: {e}")))?;
                         Ok(bytes.to_vec())
                     }
-                },
+            };
+            // 兜底：缓存 cid 失效（目录被删/账号不同）→ 重新解析最近接收
+            // 目录（无则创建），更新缓存后重试一次。
+            let mut pickcode = crate::commands::m115_rapid::rapid_or_find_pickcode(
+                &cookie, &ua, user_id, &user_key, &dir_id, &target_name, file.size,
+                &file.sha1, &reader,
             )
-            .await?;
+            .await;
+            if pickcode.is_err() {
+                let new_cid =
+                    crate::commands::m115_rapid::resolve_recent_recv_cid(&cookie, &ua).await?;
+                if new_cid != self.addition.flash_dir_id {
+                    self.addition.flash_dir_id = new_cid.clone();
+                    self.persist(db).await?;
+                }
+                pickcode = crate::commands::m115_rapid::rapid_or_find_pickcode(
+                    &cookie, &ua, user_id, &user_key, &new_cid, &target_name, file.size,
+                    &file.sha1, &reader,
+                )
+                .await;
+            }
+            let pickcode = pickcode?;
             let (dlink, ck) = self.downurl(&ua, &cookie, &pickcode, &file.name).await?;
             // The CDN rejects the download unless it carries the cookie issued
             // by this downurl response (same rule as the 115 driver).
