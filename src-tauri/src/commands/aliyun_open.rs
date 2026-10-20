@@ -1,7 +1,6 @@
 //! Aliyun Drive (open platform) driver — port of alist `drivers/aliyundrive_open`.
 //!
-//! - token refresh: official `POST /oauth/access_token` (needs client_id /
-//!   client_secret) or a hosted renew GET endpoint (alist-compatible, works
+//! - token refresh: hosted renew endpoint (messense / xiaoya / alist-go),
 //!   with a bare refresh_token).
 //! - drive info: `POST /adrive/v1.0/user/getDriveInfo` → `default_drive_id`.
 //! - list: `POST /adrive/v1.0/openFile/list` (marker pagination, limit 200).
@@ -50,12 +49,6 @@ pub fn default_drive_type() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AliyunOpenAddition {
     pub refresh_token: String,
-    /// Official open-platform credentials; leave empty to use the hosted
-    /// renew endpoint (`oauth_token_url`).
-    #[serde(default)]
-    pub client_id: String,
-    #[serde(default)]
-    pub client_secret: String,
     /// Browse root; `root` = drive root.
     #[serde(default = "default_root")]
     pub root_folder_id: String,
@@ -72,6 +65,11 @@ pub struct AliyunOpenAddition {
     /// Hosted renew endpoint used when client_id/client_secret are empty.
     #[serde(default = "default_oauth_url")]
     pub oauth_token_url: String,
+    /// QR login channel (`messense` / `xiaoya`) recorded at scan time. When
+    /// set, `ensure_access_token` auto-selects the channel's refresh endpoint
+    /// regardless of `oauth_token_url` (kept for legacy/custom configs).
+    #[serde(default)]
+    pub qr_channel: String,
     // ---- runtime token cache (persisted so a renewed refresh_token survives) ----
     #[serde(default)]
     pub access_token: String,
@@ -95,6 +93,11 @@ impl AliyunOpenAddition {
 pub struct AliyunOpenDriver {
     pub id: i64,
     pub addition: AliyunOpenAddition,
+    /// Embedded drivers (aliyun_drive_115's open_driver()) share this storage
+    /// id but their addition is a different type (contains the 115 cookie);
+    /// persisting AliyunOpenAddition's JSON here would wipe cookie/user_key/
+    /// dir_id. When true, token rotation is merged back by the outer driver.
+    pub no_persist: bool,
 }
 
 impl AliyunOpenDriver {
@@ -130,26 +133,24 @@ impl AliyunOpenDriver {
         {
             return Ok(self.addition.access_token.clone());
         }
+        // QR 扫码通道优先：messense / xiaoya 的刷新端点固定，不依赖
+        // oauth_token_url（该字段保留兼容旧配置，表单已隐藏）。
+        if !self.addition.qr_channel.is_empty() {
+            match self.addition.qr_channel.as_str() {
+                "messense" => {
+                    self.addition.oauth_token_url =
+                        "https://aliyundrive-oauth.messense.me/oauth/access_token".to_string();
+                }
+                "xiaoya" => {
+                    self.addition.oauth_token_url =
+                        "http://auth.xiaoya.pro/api/ali_open/refresh".to_string();
+                }
+                _ => {}
+            }
+        }
         let client = Self::http_client()?;
         let json: serde_json::Value;
-        if !self.addition.client_id.is_empty() && !self.addition.client_secret.is_empty() {
-            // official endpoint
-            let resp = client
-                .post(format!("{ALIYUN_API}/oauth/access_token"))
-                .json(&serde_json::json!({
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.addition.refresh_token,
-                    "client_id": self.addition.client_id,
-                    "client_secret": self.addition.client_secret,
-                }))
-                .send()
-                .await
-                .map_err(|e| AppError::CloudDrive(format!("刷新 access_token 失败: {e}")))?;
-            json = resp
-                .json()
-                .await
-                .map_err(|e| AppError::CloudDrive(format!("解析 token 响应失败: {e}")))?;
-        } else if !self.addition.oauth_token_url.is_empty() {
+        if !self.addition.oauth_token_url.is_empty() {
             let renew_url = self.addition.oauth_token_url.clone();
             let renew_lower = renew_url.to_ascii_lowercase();
             if renew_lower.contains("messense.me") {
@@ -173,8 +174,8 @@ impl AliyunOpenDriver {
                 let resp = client
                     .post(&renew_url)
                     .json(&serde_json::json!({
-                        "client_id": self.addition.client_id,
-                        "client_secret": self.addition.client_secret,
+                        "client_id": "",
+                        "client_secret": "",
                         "grant_type": "refresh_token",
                         "refresh_token": self.addition.refresh_token,
                     }))
@@ -212,8 +213,8 @@ impl AliyunOpenDriver {
                     let resp = client
                         .post(&renew_url)
                         .json(&serde_json::json!({
-                            "client_id": self.addition.client_id,
-                            "client_secret": self.addition.client_secret,
+                            "client_id": "",
+                            "client_secret": "",
                             "grant_type": "refresh_token",
                             "refresh_token": self.addition.refresh_token,
                         }))
@@ -228,7 +229,7 @@ impl AliyunOpenDriver {
             }
         } else {
             return Err(AppError::CloudDrive(
-                "缺少阿里云盘 client_id/client_secret（或托管刷新地址），无法刷新 token".into(),
+                "缺少阿里云盘托管刷新地址（oauth_token_url），无法刷新 token".into(),
             ));
         }
         let access = json["access_token"]
@@ -257,7 +258,9 @@ impl AliyunOpenDriver {
         let expires_in = json["expires_in"].as_u64().unwrap_or(25 * 24 * 3600);
         self.addition.access_token = access.clone();
         self.addition.token_expires_at = Self::now() + expires_in;
-        self.persist(db).await?;
+        if !self.no_persist {
+            self.persist(db).await?;
+        }
         Ok(access)
     }
 

@@ -106,6 +106,7 @@ const form = ref<{
   root_folder_id: string
   drive_type: string
   oauth_token_url: string
+  qr_channel: string
   cookie: string
   root_id: string
   share_url: string
@@ -128,6 +129,7 @@ const form = ref<{
   root_folder_id: 'root',
   drive_type: 'resource',
   oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
+  qr_channel: '',
   cookie: '',
   root_id: '0',
   share_url: '',
@@ -159,12 +161,14 @@ function resetForm() {
     mount_path: '',
     driver: 'baidu_netdisk',
     refresh_token: '',
-    client_id: '',
-    client_secret: '',
+    // 新增默认就是百度网盘：预填公共 client_id/client_secret（可手动改）
+    client_id: DEFAULT_CLIENT_ID,
+    client_secret: DEFAULT_CLIENT_SECRET,
     root_path: '/',
     root_folder_id: 'root',
     drive_type: 'resource',
     oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
+    qr_channel: '',
     cookie: '',
     root_id: '0',
     share_url: '',
@@ -209,6 +213,7 @@ function openEdit(s: CloudStorage) {
     root_folder_id: (addition.root_folder_id as string) ?? 'root',
     drive_type: (addition.drive_type as string) ?? 'resource',
     oauth_token_url: (addition.oauth_token_url as string) ?? 'https://api.alistgo.com/alist/ali_open/token',
+    qr_channel: (addition.qr_channel as string) ?? '',
     cookie: (addition.cookie as string) ?? '',
     root_id: (addition.root_id as string) ?? '0',
     share_url: (addition.share_url as string) ?? '',
@@ -233,6 +238,7 @@ function onDriverChange() {
   form.value.root_folder_id = 'root'
   form.value.drive_type = 'resource'
   form.value.oauth_token_url = 'https://api.alistgo.com/alist/ali_open/token'
+  form.value.qr_channel = ''
   form.value.cookie = ''
   form.value.root_id = '0'
   form.value.share_url = ''
@@ -382,7 +388,6 @@ async function openAuthorize() {
 // refresh_token; the issuer's refresh endpoint is stored into
 // `oauth_token_url` so runtime refresh stays in-channel.
 const aliyunQrDialog = ref(false)
-const aliyunQrChannel = ref<'messense' | 'xiaoya'>('messense')
 const aliyunQrSvg = ref('')
 const aliyunQrSid = ref('')
 const aliyunQrError = ref('')
@@ -402,7 +407,7 @@ async function genAliyunQrcode() {
   aliyunQrGenerating.value = true
   try {
     const r = await invoke<{ sid: string; qr_code_url: string; qrcode_svg: string }>('aliyun_qr_create', {
-      channel: aliyunQrChannel.value,
+      channel: form.value.qr_channel || 'messense',
     })
     aliyunQrSid.value = r.sid
     aliyunQrSvg.value = r.qrcode_svg
@@ -414,12 +419,13 @@ async function genAliyunQrcode() {
         })
         if (s.state === 'success' && s.auth_code) {
           const t = await invoke<{ refresh_token: string; token_url: string }>('aliyun_qr_exchange', {
-            channel: aliyunQrChannel.value,
+            channel: form.value.qr_channel || 'messense',
             authCode: s.auth_code,
           })
           form.value.refresh_token = t.refresh_token
           if (isAliyunDrive.value || isAliyunDrive115.value) {
-            form.value.oauth_token_url = t.token_url
+            // 扫码通道记入 addition.qr_channel；刷新端点由后端按通道自动选择
+            form.value.qr_channel = form.value.qr_channel || 'messense'
           }
           stopAliyunQrPoll()
           aliyunQrDialog.value = false
@@ -440,7 +446,6 @@ async function genAliyunQrcode() {
 }
 
 function openAliyunQr() {
-  aliyunQrChannel.value = 'messense'
   aliyunQrSvg.value = ''
   aliyunQrSid.value = ''
   aliyunQrError.value = ''
@@ -545,9 +550,8 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_drive') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      client_id: form.value.client_id.trim(),
-      client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
+      qr_channel: form.value.qr_channel.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
       drive_type: form.value.drive_type.trim() || 'resource',
     }
@@ -565,9 +569,8 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_drive_115') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      client_id: form.value.client_id.trim(),
-      client_secret: form.value.client_secret.trim(),
       oauth_token_url: form.value.oauth_token_url.trim(),
+      qr_channel: form.value.qr_channel.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
       drive_type: form.value.drive_type.trim() || 'resource',
       cookie: form.value.cookie.trim(),
@@ -1012,6 +1015,21 @@ onMounted(async () => {
         </template>
 
         <template v-else-if="isAliyunDrive || isAliyunDrive115">
+          <NFormItem label="扫码通道（修改通道必须重新扫码）">
+            <NSelect
+              v-model:value="form.qr_channel"
+              :options="[
+                { label: 'messense.me（默认）', value: 'messense' },
+                { label: 'xiaoya.pro', value: 'xiaoya' },
+              ]"
+              clearable
+              placeholder="未设置（兼容旧配置）"
+            />
+            <template #feedback
+              >扫码时自动记录所选通道，token 刷新走同一通道；通道由不同托管方签发
+              refresh_token，修改后需重新扫码。</template
+            >
+          </NFormItem>
           <NFormItem label="阿里云盘 refresh_token">
             <template #label>
               <div class="storage-cookie-label">
@@ -1028,20 +1046,9 @@ onMounted(async () => {
           </NFormItem>
           <p class="storage-quark-tip">
             <strong>获取方式：</strong>点右上角「扫码获取」，用阿里云盘 App 扫码授权后自动回填 refresh_token
-            与刷新地址（通道可选 messense.me / xiaoya.pro，token 由所选通道签发， 后续刷新走同一通道）；也可在
+            并按上方的扫码通道记录（messense.me / xiaoya.pro，token 刷新自动走同一通道）；也可在
             <code>https://openapi.alipan.com/oauth/authorize</code> 授权获取后手动粘贴。
           </p>
-          <NSpace :size="12">
-            <NFormItem label="client_id" class="storage-flex-item">
-              <NInput v-model:value="form.client_id" placeholder="默认 alist 官方 client_id" />
-            </NFormItem>
-            <NFormItem label="client_secret" class="storage-flex-item">
-              <NInput v-model:value="form.client_secret" placeholder="默认 alist 官方 client_secret" />
-            </NFormItem>
-          </NSpace>
-          <NFormItem label="oauth_token_url（自建托管时填写）">
-            <NInput v-model:value="form.oauth_token_url" placeholder="https://api.alistgo.com/alist/ali_open/token" />
-          </NFormItem>
           <NFormItem label="云盘类型（drive_type）">
             <NSelect
               v-model:value="form.drive_type"
@@ -1174,21 +1181,8 @@ onMounted(async () => {
     >
       <p class="storage-quark-tip">
         请使用<strong>阿里云盘 App</strong> 扫码登录（手机端需已登录账号），扫码确认后自动回填 refresh_token
-        与刷新地址。<br />「通道」决定 token 由哪个托管方签发，后续刷新将走同一通道。
+        与扫码通道。<br />「通道」决定 token 由哪个托管方签发，后续刷新将走同一通道，可在表单里随时修改。
       </p>
-      <div class="qr-channel-row">
-        <span class="qr-channel-label">扫码通道</span>
-        <NSelect
-          v-model:value="aliyunQrChannel"
-          size="small"
-          :options="[
-            { label: 'messense.me（默认）', value: 'messense' },
-            { label: 'xiaoya.pro', value: 'xiaoya' },
-          ]"
-          style="width: 190px"
-          @update:value="genAliyunQrcode"
-        />
-      </div>
       <div class="qr-box">
         <img
           v-if="aliyunQrSvg"

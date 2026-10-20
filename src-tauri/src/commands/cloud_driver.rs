@@ -330,6 +330,7 @@ impl CloudDriver {
             "aliyun_drive" => Ok(CloudDriver::AliyunDrive(AliyunOpenDriver {
                 id: storage.id,
                 addition: AliyunOpenAddition::parse(&storage.addition)?,
+                no_persist: false,
             })),
             "aliyun_share" => {
                 let mut addition = AliyunShareAddition::parse(&storage.addition)?;
@@ -357,6 +358,7 @@ impl CloudDriver {
                 Ok(CloudDriver::AliyunShare115(AliyunShare115Driver {
                     id: storage.id,
                     addition,
+                    no_persist: false,
                 }))
             }
             other => Err(AppError::CloudDrive(format!(
@@ -2153,6 +2155,12 @@ pub async fn cloud_drive_share_list(
                 AliyunShareDriver::transient(storage.id, &addition, &share_url, &passcode);
             driver.list(&db.0, &path).await
         }
+        "aliyun_share_115" => {
+            let addition = AliyunShare115Addition::parse(&storage.addition)?;
+            let mut driver =
+                AliyunShare115Driver::transient(storage.id, &addition, &share_url, &passcode);
+            driver.list(&db.0, &path).await
+        }
         other => Err(AppError::CloudDrive(format!(
             "「提取分享」当前仅支持夸克分享、115 分享与阿里分享存储，当前存储为 {other}"
         ))),
@@ -2204,6 +2212,16 @@ pub async fn cloud_drive_share_download(
             let mut driver =
                 AliyunShareDriver::transient(storage.id, &addition, &share_url, &passcode);
             let files = expand_aliyun_share_folders(&mut driver, &db.0, files).await?;
+            if files.is_empty() {
+                return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
+            }
+            driver.get_dlinks(&db.0, &files).await?
+        }
+        "aliyun_share_115" => {
+            let addition = AliyunShare115Addition::parse(&storage.addition)?;
+            let mut driver =
+                AliyunShare115Driver::transient(storage.id, &addition, &share_url, &passcode);
+            let files = expand_aliyun_share_folders_115(&mut driver, &db.0, files).await?;
             if files.is_empty() {
                 return Err(AppError::CloudDrive("所选文件夹中没有可下载的文件".into()));
             }
@@ -2274,6 +2292,44 @@ async fn expand_m115_share_folders(
 /// files (same BFS as the 115 variant; the aliyun `list` takes a db handle).
 async fn expand_aliyun_share_folders(
     driver: &mut AliyunShareDriver,
+    db: &Database,
+    files: Vec<CloudDriveFile>,
+) -> Result<Vec<CloudDriveFile>, AppError> {
+    let mut result: Vec<CloudDriveFile> = Vec::new();
+    let mut queue: Vec<CloudDriveFile> = files;
+    for f in queue.iter_mut() {
+        f.rel_path = if f.isdir { f.name.clone() } else { String::new() };
+    }
+    let mut requests = 0usize;
+    while let Some(item) = queue.pop() {
+        if !item.isdir {
+            result.push(item);
+            continue;
+        }
+        let children = driver.list(db, &item.path).await?;
+        requests += 1;
+        if requests % 50 == 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        for mut child in children {
+            child.rel_path = if child.isdir {
+                if item.rel_path.is_empty() {
+                    child.name.clone()
+                } else {
+                    format!("{}/{}", item.rel_path, child.name)
+                }
+            } else {
+                item.rel_path.clone()
+            };
+            queue.push(child);
+        }
+    }
+    Ok(result)
+}
+
+/// Same as `expand_aliyun_share_folders` for the AliyunShare115 driver.
+async fn expand_aliyun_share_folders_115(
+    driver: &mut AliyunShare115Driver,
     db: &Database,
     files: Vec<CloudDriveFile>,
 ) -> Result<Vec<CloudDriveFile>, AppError> {

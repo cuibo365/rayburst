@@ -27,10 +27,6 @@ fn default_115_dir() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AliyunDrive115Addition {
     pub refresh_token: String,
-    #[serde(default)]
-    pub client_id: String,
-    #[serde(default)]
-    pub client_secret: String,
     #[serde(default = "default_root")]
     pub root_folder_id: String,
     /// Alipan drive: default / resource / backup.
@@ -38,6 +34,10 @@ pub struct AliyunDrive115Addition {
     pub drive_type: String,
     #[serde(default = "default_oauth_url")]
     pub oauth_token_url: String,
+    /// QR login channel (`messense` / `xiaoya`) recorded at scan time; the
+    /// embedded open driver auto-selects the channel's refresh endpoint.
+    #[serde(default)]
+    pub qr_channel: String,
     /// 115 web-session cookie (UID/CID/SEID[/KID]).
     pub cookie: String,
     /// Optional 115 user key (rarely needed; empty is fine).
@@ -114,22 +114,24 @@ impl AliyunDrive115Driver {
     }
 
     /// Build the embedded Aliyun open driver (shares the token cache).
+    /// `no_persist`: never overwrite this storage's addition with the open
+    /// driver's JSON (it would wipe cookie/user_key/dir_id).
     fn open_driver(&self) -> AliyunOpenDriver {
         AliyunOpenDriver {
             id: self.id,
             addition: AliyunOpenAddition {
                 refresh_token: self.addition.refresh_token.clone(),
-                client_id: self.addition.client_id.clone(),
-                client_secret: self.addition.client_secret.clone(),
                 root_folder_id: self.addition.root_folder_id.clone(),
                 drive_type: self.addition.drive_type.clone(),
                 order_by: String::new(),
                 order_direction: String::new(),
                 oauth_token_url: self.addition.oauth_token_url.clone(),
+                qr_channel: self.addition.qr_channel.clone(),
                 access_token: self.addition.access_token.clone(),
                 token_expires_at: self.addition.token_expires_at,
                 drive_id: self.addition.drive_id.clone(),
             },
+            no_persist: true,
         }
     }
 
@@ -148,7 +150,13 @@ impl AliyunDrive115Driver {
     ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
         let mut open = self.open_driver();
         let r = open.list(db, file_id).await;
+        let rotated = self.addition.refresh_token != open.addition.refresh_token
+            || self.addition.access_token != open.addition.access_token;
         self.sync_open_cache(&open);
+        if rotated {
+            // no_persist 的 open 驱动不落库；旋转的 refresh_token 由这里保存。
+            self.persist(db).await?;
+        }
         if r.is_ok() {
             if self.addition.user_id == 0 {
                 self.addition.user_id = AliyunDrive115Addition::parse_uid(&self.addition.cookie);
@@ -179,6 +187,9 @@ impl AliyunDrive115Driver {
         let mut open = self.open_driver();
         let access_token = open.ensure_access_token(db).await?;
         self.sync_open_cache(&open);
+        // no_persist 的 open 驱动不落库；旋转的 refresh_token 由这里用完整
+        // addition（含 115 cookie）保存。
+        self.persist(db).await?;
         let mut result = Vec::new();
         for file in files {
             if file.isdir || file.sha1.is_empty() {

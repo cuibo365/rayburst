@@ -101,9 +101,43 @@ impl AliyunShare115Addition {
 pub struct AliyunShare115Driver {
     pub id: i64,
     pub addition: AliyunShare115Addition,
+    /// Transient (提取分享) drivers must not write the just-entered share
+    /// fields back into the source storage; set to true by `transient()`.
+    pub no_persist: bool,
 }
 
 impl AliyunShare115Driver {
+    /// Transient driver for 提取分享: borrows the source storage's own-drive
+    /// credentials (refresh_token, access_token cache, own_drive_id) and the
+    /// 115 cookie, but replaces the share fields with the just-entered URL.
+    ///
+    /// Share-scoped caches (`share_token`) are cleared: a cached token belongs
+    /// to the source storage's share and would 400 against the new share_id
+    /// ("share_id doesn't match share_token").
+    pub fn transient(
+        storage_id: i64,
+        storage: &AliyunShare115Addition,
+        share_url: &str,
+        passcode: &str,
+    ) -> Self {
+        let mut addition = storage.clone();
+        let (sid, spwd) = AliyunShareAddition::parse_share_url(share_url);
+        addition.share_url = share_url.to_string();
+        addition.share_id = sid;
+        addition.share_pwd = if spwd.is_empty() {
+            passcode.to_string()
+        } else {
+            spwd
+        };
+        addition.share_token = String::new();
+        addition.share_token_expires_at = 0;
+        Self {
+            id: storage_id,
+            addition,
+            no_persist: true,
+        }
+    }
+
     fn http_client(ua: &str) -> Result<reqwest::Client, AppError> {
         reqwest::Client::builder()
             .user_agent(ua)
@@ -120,6 +154,10 @@ impl AliyunShare115Driver {
     }
 
     pub async fn persist(&self, db: &Database) -> Result<(), AppError> {
+        if self.no_persist {
+            // transient（提取分享）：不写回源存储（含临时分享字段）。
+            return Ok(());
+        }
         db.update_storage_addition(self.id, &self.addition.to_json()?)
             .await?;
         Ok(())
@@ -132,7 +170,10 @@ impl AliyunShare115Driver {
     fn share_driver(&self) -> AliyunShareDriver {
         AliyunShareDriver {
             id: self.id,
-            no_persist: false,
+            // no_persist: 该 share 驱动是嵌入式的，源存储 addition 是
+            // AliyunShare115Addition（含 115 cookie）；persist 覆盖会清空
+            // cookie/user_key/dir_id。token 旋转由外层 sync_caches 合并后保存。
+            no_persist: true,
             original: None,
             addition: AliyunShareAddition {
                 refresh_token: self.addition.refresh_token.clone(),
@@ -168,7 +209,13 @@ impl AliyunShare115Driver {
     ) -> Result<Vec<crate::commands::CloudDriveFile>, AppError> {
         let mut share = self.share_driver();
         let r = share.list(db, file_id).await;
+        let rotated = self.addition.refresh_token != share.addition.refresh_token
+            || self.addition.share_access_token != share.addition.access_token
+            || self.addition.share_token != share.addition.share_token;
         self.sync_caches(&share);
+        if rotated {
+            self.persist(db).await?;
+        }
         if r.is_ok() {
             if self.addition.user_id == 0 {
                 self.addition.user_id = AliyunShare115Addition::parse_uid(&self.addition.cookie);
@@ -200,7 +247,13 @@ impl AliyunShare115Driver {
         let access = share.addition.access_token.clone();
         // own drive id from the web domain (resource drive by default)
         let own_drive = share.ensure_own_drive_id(&client, &access).await?;
+        let rotated = self.addition.refresh_token != share.addition.refresh_token
+            || self.addition.share_access_token != share.addition.access_token
+            || self.addition.share_token != share.addition.share_token;
         self.sync_caches(&share);
+        if rotated {
+            self.persist(db).await?;
+        }
 
         let cookie = self.addition.cookie.clone();
         let dir_id = self.addition.dir_id.trim().to_string();
@@ -243,9 +296,16 @@ impl AliyunShare115Driver {
                     "阿里分享 drive_id 为空，请先浏览一次分享目录".into(),
                 ));
             }
-            // 1) copy the share file into the own drive
-            let _copied = self
-                .copy_to_own(
+            // 0) 目标目录查重：同名+同大小+SHA1 已存在 → 直接复用，避免
+            //    重复转存创建多个相同文件。
+            let pre_existing = self
+                .find_existing(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
+                .await?;
+            let (_copy_id, sha1) = if let Some(found) = pre_existing {
+                found
+            } else {
+                // 1) copy the share file into the own drive
+                self.copy_to_own(
                     &client,
                     &share_access,
                     &share_token,
@@ -257,10 +317,10 @@ impl AliyunShare115Driver {
                     &file.name,
                 )
                 .await?;
-            // 2) find the copied file in the own drive → SHA1 (web-domain)
-            let (_copy_id, sha1) = self
-                .find_copied(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
-                .await?;
+                // 2) find the copied file in the own drive → SHA1 (web-domain)
+                self.find_copied(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
+                    .await?
+            };
             if sha1.is_empty() {
                 return Err(AppError::CloudDrive(format!(
                     "{} 转存后未取到 SHA1",
@@ -413,6 +473,27 @@ impl AliyunShare115Driver {
         Ok(json)
     }
 
+    /// Single-shot lookup of an already-copied file in the own drive target
+    /// dir (name + size + SHA1). Used before copy to avoid creating duplicate
+    /// files on repeated downloads of the same share file.
+    async fn find_existing(
+        &mut self,
+        share: &mut AliyunShareDriver,
+        db: &Database,
+        copy_dir: &str,
+        own_drive: &str,
+        name: &str,
+        size: u64,
+    ) -> Result<Option<(String, String)>, AppError> {
+        let list = share.list_own_dir(db, own_drive, copy_dir).await?;
+        for f in list {
+            if f.name == name && f.size == size && !f.sha1.is_empty() {
+                return Ok(Some((f.id.clone(), f.sha1.clone())));
+            }
+        }
+        Ok(None)
+    }
+
     /// Poll the own-drive copy dir until a file matching name+size appears.
     /// SHA1 comes from the web-domain own-drive listing (`content_hash`).
     async fn find_copied(
@@ -427,11 +508,11 @@ impl AliyunShare115Driver {
         // The copy is async; poll the target dir up to ~30s.
         for _ in 0..30 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let list = share.list_own_dir(db, own_drive, copy_dir).await?;
-            for f in list {
-                if f.name == name && f.size == size && !f.sha1.is_empty() {
-                    return Ok((f.id.clone(), f.sha1.clone()));
-                }
+            if let Some(found) = self
+                .find_existing(share, db, copy_dir, own_drive, name, size)
+                .await?
+            {
+                return Ok(found);
             }
         }
         Err(AppError::CloudDrive(format!(

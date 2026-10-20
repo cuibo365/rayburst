@@ -87,7 +87,7 @@ const shareKind = computed(() => {
   const s = storages.value.find((x) => x.id === shareSourceId.value)
   const d = s?.driver ?? 'quark_share'
   if (d === 'm115' || d === 'm115_share') return 'm115'
-  if (d === 'aliyun_share') return 'aliyun_share'
+  if (d === 'aliyun_share' || d === 'aliyun_share_115') return 'aliyun_share'
   return d
 })
 const isM115Share = computed(() => shareKind.value === 'm115')
@@ -365,7 +365,13 @@ function openShareDialog(s: CloudStorage) {
 async function confirmShare() {
   const url = shareForm.value.shareUrl.trim()
   if (!url) {
-    message.warning(isM115Share.value ? '请填写 115 分享地址' : '请填写夸克分享地址')
+    message.warning(
+      isM115Share.value
+        ? '请填写 115 分享地址'
+        : isAliyunShareTransient.value
+          ? '请填写阿里分享地址'
+          : '请填写夸克分享地址',
+    )
     return
   }
   shareSaving.value = true
@@ -526,7 +532,8 @@ onMounted(async () => {
                     s.driver === 'quark_share' ||
                     s.driver === 'm115' ||
                     s.driver === 'm115_share' ||
-                    s.driver === 'aliyun_share'
+                    s.driver === 'aliyun_share' ||
+                    s.driver === 'aliyun_share_115'
                   "
                   size="tiny"
                   secondary
