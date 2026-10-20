@@ -947,7 +947,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>refresh_token</span>
-                <NButton size="small" @click="openSync('baidu')">同步获取</NButton>
+                <NButton size="small" type="primary" @click="openSync('baidu')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openAuthorize">扫码获取</NButton>
               </div>
             </template>
@@ -976,7 +976,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="small" @click="openSync('quark')">同步获取</NButton>
+                <NButton size="small" type="primary" @click="openSync('quark')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('quark')">扫码获取</NButton>
               </div>
             </template>
@@ -1003,7 +1003,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="small" @click="openSync('quark')">同步获取</NButton>
+                <NButton size="small" type="primary" @click="openSync('quark')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('quark')">扫码获取</NButton>
               </div>
             </template>
@@ -1030,7 +1030,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="small" @click="openSync('m115')">同步获取</NButton>
+                <NButton size="small" type="primary" @click="openSync('m115')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
               </div>
             </template>
@@ -1069,7 +1069,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
-                <NButton size="small" @click="openSync('m115')">同步获取</NButton>
+                <NButton size="small" type="primary" @click="openSync('m115')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
               </div>
             </template>
@@ -1098,7 +1098,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
-                <NButton size="small" @click="openSync('aliyunOpen')">同步获取</NButton>
+                <NButton size="small" type="primary" @click="openSync('aliyunOpen')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openAliyunQr">扫码获取</NButton>
               </div>
             </template>
@@ -1136,7 +1136,7 @@ onMounted(async () => {
               <template #label>
                 <div class="storage-cookie-label">
                   <span>115 Cookie</span>
-                  <NButton size="small" @click="openSync('m115')">同步获取</NButton>
+                  <NButton size="small" type="primary" @click="openSync('m115')">同步获取</NButton>
                   <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
                 </div>
               </template>
@@ -1168,7 +1168,7 @@ onMounted(async () => {
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
-                <NButton size="small" @click="openSync('aliyunShare')">同步获取</NButton>
+                <NButton size="small" type="primary" @click="openSync('aliyunShare')">同步获取</NButton>
                 <NButton size="small" type="primary" @click="openAliyunWebQr">扫码获取</NButton>
               </div>
             </template>
@@ -1212,7 +1212,7 @@ onMounted(async () => {
               <template #label>
                 <div class="storage-cookie-label">
                   <span>115 Cookie</span>
-                  <NButton size="small" @click="openSync('m115')">同步获取</NButton>
+                  <NButton size="small" type="primary" @click="openSync('m115')">同步获取</NButton>
                   <NButton size="small" type="primary" @click="openQrcode('m115')">扫码获取</NButton>
                 </div>
               </template>
@@ -1444,6 +1444,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  width: 100%;
   width: 100%;
 }
 .qr-box {
