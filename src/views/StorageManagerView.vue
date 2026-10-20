@@ -305,10 +305,12 @@ function openSync(key: string) {
   syncOpen.value = true
 }
 
-function applySync() {
+// 选中来源即填入对应字段并关闭；清空（null）不填、弹窗保持打开。
+function onSyncPick(v: number | null) {
+  if (v === null) return
   const g = syncGroup.value
-  if (!g || syncSelected.value === null) return
-  const s = storages.value.find((x) => x.id === syncSelected.value)
+  if (!g) return
+  const s = storages.value.find((x) => x.id === v)
   if (s) applyCredSource(g, s)
   syncOpen.value = false
 }
@@ -1247,7 +1249,7 @@ onMounted(async () => {
       </template>
     </NModal>
 
-    <!-- 同步获取：选择组内来源存储，填入对应凭据字段 -->
+    <!-- 同步获取：选择组内来源存储，选中即填入对应凭据字段 -->
     <NModal
       v-model:show="syncOpen"
       preset="card"
@@ -1256,16 +1258,13 @@ onMounted(async () => {
       :style="{ width: '420px' }"
       :bordered="false"
     >
-      <p class="storage-quark-tip">
-        {{ syncGroup?.label }}：选择已有存储后自动填入对应字段（挂载路径、根目录等存储特有字段不受影响）。
-      </p>
-      <NSelect v-model:value="syncSelected" :options="syncOptions" clearable placeholder="选择来源存储" />
-      <template #footer>
-        <div class="storage-dialog-actions">
-          <NButton secondary @click="syncOpen = false">取消</NButton>
-          <NButton type="primary" :disabled="syncSelected === null" @click="applySync">确定</NButton>
-        </div>
-      </template>
+      <NSelect
+        v-model:value="syncSelected"
+        :options="syncOptions"
+        clearable
+        placeholder="选择来源存储"
+        @update:value="onSyncPick"
+      />
     </NModal>
 
     <!-- 阿里云盘 open token 扫码（小雅双通道） -->
@@ -1445,6 +1444,12 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+}
+/* NFormItem 的 label 容器默认不是全宽，撑满后按钮组才能真正右对齐 */
+.storage-dialog :deep(.n-form-item-label) {
+  width: 100%;
+}
+.storage-dialog :deep(.n-form-item-label) .storage-cookie-label {
   width: 100%;
 }
 .qr-box {
