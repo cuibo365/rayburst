@@ -302,6 +302,8 @@ impl AliyunShareDriver {
                     "parent_file_id": parent,
                     "limit": 200,
                     "marker": marker,
+                    "order_by": "name",
+                    "order_direction": "ASC",
                 }))
                 .send()
                 .await
@@ -367,6 +369,8 @@ impl AliyunShareDriver {
                     "parent_file_id": parent,
                     "limit": 200,
                     "marker": marker,
+                    "order_by": "name",
+                    "order_direction": "ASC",
                 }))
                 .send()
                 .await

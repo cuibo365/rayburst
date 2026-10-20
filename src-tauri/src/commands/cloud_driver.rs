@@ -529,7 +529,7 @@ impl BaiduDriver {
         let mut start = 0usize;
         for page in 0..MAX_PAGES {
             let url = format!(
-                "{BAIDU_FILE_LIST_URL}&dir={}&limit={LIMIT}&start={start}&web=1&access_token={}",
+                "{BAIDU_FILE_LIST_URL}&dir={}&limit={LIMIT}&start={start}&web=1&order=name&desc=0&access_token={}",
                 urlencoding::encode(path),
                 token
             );
@@ -801,7 +801,7 @@ impl QuarkDriver {
             for attempt in 0..QUARK_MAX_ATTEMPTS {
                 let client = Self::http_client()?;
                 let url = format!(
-                    "{QUARK_API}/file/sort?pdir_fid={}&_size={SIZE}&_fetch_total=1&fetch_all_file=1&fetch_risk_file_name=1&_page={page}&pr=ucpro&fr=pc",
+                    "{QUARK_API}/file/sort?pdir_fid={}&_size={SIZE}&_fetch_total=1&fetch_all_file=1&fetch_risk_file_name=1&_page={page}&pr=ucpro&fr=pc&_sort=file_type:asc,name:asc",
                     urlencoding::encode(fid)
                 );
                 let resp = client
@@ -1681,7 +1681,7 @@ impl QuarkShareDriver {
                 };
                 let client = Self::http_client()?;
                 let url = format!(
-                    "{QUARK_API}/share/sharepage/detail?pr=ucpro&fr=pc&pwd_id={}&stoken={}&pdir_fid={}&force=0&_page={}&_size={SIZE}&_fetch_banner=1&_fetch_share=1&_fetch_total=1&_sort=file_type:asc,updated_at:desc",
+                    "{QUARK_API}/share/sharepage/detail?pr=ucpro&fr=pc&pwd_id={}&stoken={}&pdir_fid={}&force=0&_page={}&_size={SIZE}&_fetch_banner=1&_fetch_share=1&_fetch_total=1&_sort=file_type:asc,name:asc",
                     urlencoding::encode(&pwd_id),
                     urlencoding::encode(&stoken),
                     urlencoding::encode(fid),

@@ -270,13 +270,18 @@ impl AliyunOpenDriver {
                 "parent_file_id": parent,
                 "marker": marker,
             });
-            if !self.addition.order_by.is_empty() {
-                body["order_by"] = serde_json::Value::String(self.addition.order_by.clone());
-            }
-            if !self.addition.order_direction.is_empty() {
-                body["order_direction"] =
-                    serde_json::Value::String(self.addition.order_direction.clone());
-            }
+            // 默认按名称升序（order_by / order_direction 有配置值则优先）。
+            body["order_by"] = serde_json::Value::String(if self.addition.order_by.is_empty() {
+                "name".into()
+            } else {
+                self.addition.order_by.clone()
+            });
+            body["order_direction"] = serde_json::Value::String(if self.addition.order_direction.is_empty()
+            {
+                "ASC".into()
+            } else {
+                self.addition.order_direction.clone()
+            });
             let resp = client
                 .post(format!("{ALIYUN_API}/adrive/v1.0/openFile/list"))
                 .bearer_auth(&token)
