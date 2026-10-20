@@ -1502,18 +1502,19 @@ onMounted(async () => {
 
 <!--
   NModal teleports its content to <body>, so scoped styles can never reach the
-  dialog's inner DOM. These global rules are pinned to .storage-dialog to make
-  the 扫码获取 buttons sit flush right in the form label row.
+  dialog's inner DOM. These global rules (no .storage-dialog prefix, matched by
+  :has on the cookie-label row) force the label row and its text wrapper to full
+  width so 同步获取/扫码获取 sit flush right.
 -->
 <style>
-.storage-dialog .n-form-item-label {
+.n-form-item-label:has(.storage-cookie-label) {
   display: flex;
   align-items: center;
-  width: 100%;
+  width: 100% !important;
 }
-.storage-dialog .n-form-item-label__text {
+.n-form-item-label__text:has(.storage-cookie-label) {
   display: flex;
   align-items: center;
-  width: 100%;
+  width: 100% !important;
 }
 </style>
