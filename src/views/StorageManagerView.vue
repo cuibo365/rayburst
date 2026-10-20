@@ -180,6 +180,8 @@ function resetForm() {
 
 function openAdd() {
   resetForm()
+  // 新增默认驱动即百度网盘：onDriverChange 不会触发，这里显式带入凭据。
+  applyCredDefaults()
   showDialog.value = true
 }
 
@@ -222,6 +224,101 @@ function openEdit(s: CloudStorage) {
   showDialog.value = true
 }
 
+// 凭据组：同组驱动/存储共享同一账号凭据，新增存储时可复用。
+// 字段必须同源带（如阿里 open 的 refresh_token 与扫码通道需对应）。
+interface CredentialGroup {
+  key: string
+  label: string
+  drivers: string[]
+  fields: string[]
+}
+
+const credentialGroups: CredentialGroup[] = [
+  {
+    key: 'aliyunOpen',
+    label: '阿里 open 账号来源（自动带入 refresh_token + 扫码通道）',
+    drivers: ['aliyun_drive', 'aliyun_drive_115'],
+    fields: ['refresh_token', 'qr_channel'],
+  },
+  {
+    key: 'aliyunShare',
+    label: '阿里分享账号来源（自动带入 refresh_token）',
+    drivers: ['aliyun_share', 'aliyun_share_115'],
+    fields: ['refresh_token'],
+  },
+  {
+    key: 'm115',
+    label: '115 账号来源（自动带入 Cookie + 扫码设备）',
+    drivers: ['m115', 'm115_share', 'aliyun_drive_115', 'aliyun_share_115'],
+    fields: ['cookie', 'qr_source'],
+  },
+  {
+    key: 'quark',
+    label: '夸克账号来源（自动带入 Cookie）',
+    drivers: ['quark', 'quark_share'],
+    fields: ['cookie'],
+  },
+  {
+    key: 'baidu',
+    label: '百度账号来源（自动带入 refresh_token）',
+    drivers: ['baidu_netdisk'],
+    fields: ['refresh_token'],
+  },
+]
+
+const isAddMode = computed(() => editingId.value === null)
+const credGroupsForDriver = computed(() => credentialGroups.filter((g) => g.drivers.includes(form.value.driver)))
+const credSelected = ref<Record<string, number | undefined>>({})
+
+function credCandidates(g: CredentialGroup): CloudStorage[] {
+  return storages.value
+    .filter((s) => !s.disabled && g.drivers.includes(s.driver))
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
+}
+
+function credOptions(g: CredentialGroup) {
+  return credCandidates(g).map((s) => ({
+    label: `${s.mount_path}${s.remark ? ` · ${s.remark}` : ''}`,
+    value: s.id,
+  }))
+}
+
+function applyCredSource(g: CredentialGroup, storage: CloudStorage | null) {
+  if (!storage) return
+  let addition: Record<string, unknown> = {}
+  try {
+    addition = JSON.parse(storage.addition) as Record<string, unknown>
+  } catch {
+    addition = {}
+  }
+  for (const f of g.fields) {
+    const v = addition[f]
+    ;(form.value as Record<string, unknown>)[f] = typeof v === 'string' ? v : ''
+  }
+}
+
+function onCredChange(g: CredentialGroup, v: number | null) {
+  credSelected.value[g.key] = v ?? undefined
+  if (v === null) return
+  const s = storages.value.find((x) => x.id === v)
+  if (s) applyCredSource(g, s)
+}
+
+// 新增模式下：为当前驱动的每个凭据组默认选最近创建的来源并自动带入。
+function applyCredDefaults() {
+  if (editingId.value !== null) return
+  for (const g of credGroupsForDriver.value) {
+    const cands = credCandidates(g)
+    if (!cands.length) {
+      credSelected.value[g.key] = undefined
+      continue
+    }
+    const latest = cands[cands.length - 1]
+    credSelected.value[g.key] = latest.id
+    applyCredSource(g, latest)
+  }
+}
+
 function onDriverChange() {
   // Re-apply driver defaults whenever the driver switches (or is first picked).
   form.value.client_id = ''
@@ -238,6 +335,7 @@ function onDriverChange() {
   form.value.dir_id = '0'
   form.value.open_copy_dir = 'root'
   form.value.qr_source = 'alipaymini'
+  applyCredDefaults()
 }
 
 // --- qrcode login (扫码获取 Cookie): quark / 115 ---
@@ -850,6 +948,19 @@ onMounted(async () => {
         <NFormItem label="驱动">
           <NSelect v-model:value="form.driver" :options="[...DRIVERS]" @update:value="onDriverChange" />
         </NFormItem>
+
+        <template v-if="isAddMode && credGroupsForDriver.length">
+          <NFormItem v-for="g in credGroupsForDriver" :key="g.key" :label="g.label">
+            <NSelect
+              :value="credSelected[g.key]"
+              :options="credOptions(g)"
+              clearable
+              size="small"
+              placeholder="不选择（手动填写）"
+              @update:value="(v: number | null) => onCredChange(g, v)"
+            />
+          </NFormItem>
+        </template>
 
         <template v-if="isBaidu">
           <NFormItem label="refresh_token">
