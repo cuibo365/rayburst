@@ -188,8 +188,10 @@ impl AliyunDrive115Driver {
             self.persist(db).await?;
         }
         let dir_id = self.addition.flash_dir_id.clone();
-        // user_key 为空即可（115 秒传签名对 userkey 不敏感，实测无需填写）。
-        let user_key = String::new();
+        // user_key 必须从 115 uploadinfo 动态获取：它参与闪传签名（sig），
+        // 签名回合第二轮会用 userkey 校验，传空串会被 115 以 status=4 拒绝，
+        // 导致闪传从未真正命中（只能靠目录 find 兜底捡现成）。
+        let user_key = crate::commands::m115_rapid::fetch_upload_userkey(&cookie, &ua).await?;
         // Refresh the embedded open-driver token once up front (rotates and
         // persists); the sign-proof reader below uses it for Range downloads.
         let mut open = self.open_driver();

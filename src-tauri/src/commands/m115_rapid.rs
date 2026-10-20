@@ -469,6 +469,46 @@ pub async fn find_pickcode_by_sha1(
     Ok(None)
 }
 
+/// Fetch the 115 upload userkey for this cookie via app/uploadinfo.
+///
+/// The userkey participates in the rapid-upload `sig` (first round) AND is
+/// validated by 115 in the sign-proof second round: with an empty userkey the
+/// second submit is rejected with status=4, so every flash transfer silently
+/// falls back to the directory lookup (which only works when the target dir
+/// already holds the same SHA1). Fetching the real userkey makes the transfer
+/// actually hit (status=7 -> sign proof -> status=2).
+pub async fn fetch_upload_userkey(cookie: &str, ua: &str) -> Result<String, AppError> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://proapi.115.com/app/uploadinfo")
+        .header("Cookie", cookie)
+        .header("User-Agent", ua)
+        .send()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("请求 115 uploadinfo 失败: {e}")))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| AppError::CloudDrive(format!("读取 115 uploadinfo 失败: {e}")))?;
+    if !status.is_success() {
+        let body = text.chars().take(300).collect::<String>();
+        return Err(AppError::CloudDrive(format!(
+            "请求 115 uploadinfo 失败（HTTP {status}）：{body}"
+        )));
+    }
+    let j: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| AppError::CloudDrive(format!("解析 115 uploadinfo 失败: {e}")))?;
+    let uk = j["userkey"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::CloudDrive("115 uploadinfo 响应缺少 userkey（cookie 可能已失效）".into())
+        })?
+        .to_string();
+    Ok(uk)
+}
+
 /// Dynamically resolve the 115 最近接收 directory cid under the drive root;
 /// create it when missing. Used as a fallback when a flash transfer with the
 /// cached cid fails (directory deleted, or the cid differs per account).
