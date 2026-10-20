@@ -4,7 +4,7 @@
  * Adding a Baidu Netdisk storage fills client_id/client_secret with defaults;
  * the refresh_token field carries an "获取" button that opens the OAuth page.
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   NButton,
   NCheckbox,
@@ -105,7 +105,6 @@ const form = ref<{
   root_path: string
   root_folder_id: string
   drive_type: string
-  oauth_token_url: string
   qr_channel: string
   cookie: string
   root_id: string
@@ -128,8 +127,7 @@ const form = ref<{
   root_path: '/',
   root_folder_id: 'root',
   drive_type: 'resource',
-  oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
-  qr_channel: '',
+  qr_channel: 'messense',
   cookie: '',
   root_id: '0',
   share_url: '',
@@ -167,8 +165,7 @@ function resetForm() {
     root_path: '/',
     root_folder_id: 'root',
     drive_type: 'resource',
-    oauth_token_url: 'https://api.alistgo.com/alist/ali_open/token',
-    qr_channel: '',
+    qr_channel: 'messense',
     cookie: '',
     root_id: '0',
     share_url: '',
@@ -212,8 +209,7 @@ function openEdit(s: CloudStorage) {
     root_path: (addition.root_path as string) ?? '/',
     root_folder_id: (addition.root_folder_id as string) ?? 'root',
     drive_type: (addition.drive_type as string) ?? 'resource',
-    oauth_token_url: (addition.oauth_token_url as string) ?? 'https://api.alistgo.com/alist/ali_open/token',
-    qr_channel: (addition.qr_channel as string) ?? '',
+    qr_channel: (addition.qr_channel as string) ?? 'messense',
     cookie: (addition.cookie as string) ?? '',
     root_id: (addition.root_id as string) ?? '0',
     share_url: (addition.share_url as string) ?? '',
@@ -237,8 +233,7 @@ function onDriverChange() {
   form.value.root_path = '/'
   form.value.root_folder_id = 'root'
   form.value.drive_type = 'resource'
-  form.value.oauth_token_url = 'https://api.alistgo.com/alist/ali_open/token'
-  form.value.qr_channel = ''
+  form.value.qr_channel = 'messense'
   form.value.cookie = ''
   form.value.root_id = '0'
   form.value.share_url = ''
@@ -260,7 +255,8 @@ const qrTime = ref(0)
 const qrSign = ref('')
 const qrError = ref('')
 const qrGenerating = ref(false)
-const qrSource = ref('alipaymini')
+// 扫码设备取自表单「扫码设备」记录值；未选时默认 115生活（支付宝小程序）。
+const activeQrSource = () => form.value.qr_source?.trim() || 'alipaymini'
 const m115QrSourceOptions = [
   { label: '115生活（支付宝小程序）', value: 'alipaymini' },
   { label: '115生活（网页端）', value: 'web' },
@@ -291,7 +287,7 @@ async function genQrcode() {
     if (qrKind.value === 'm115') {
       const r = await invoke<{ qrcode_svg: string; uid: string; time: number; sign: string }>(
         'cloud_drive_115_qrcode_create',
-        { source: qrSource.value },
+        { source: activeQrSource() },
       )
       qrUid.value = r.uid
       qrTime.value = r.time
@@ -302,11 +298,15 @@ async function genQrcode() {
         try {
           const r = await invoke<{ state: string; cookie?: string; message?: string }>(
             'cloud_drive_115_qrcode_status',
-            { uid: qrUid.value, time: qrTime.value, sign: qrSign.value, source: qrSource.value },
+            {
+              uid: qrUid.value,
+              time: qrTime.value,
+              sign: qrSign.value,
+              source: activeQrSource(),
+            },
           )
           if (r.state === 'success' && r.cookie) {
             form.value.cookie = r.cookie
-            form.value.qr_source = qrSource.value
             stopQrPoll()
             qrDialog.value = false
             message.success('扫码成功，Cookie 已自动填入')
@@ -362,13 +362,6 @@ function openQrcode(kind: 'quark' | 'm115' = 'quark') {
   void genQrcode()
 }
 
-// 切换 115 扫码设备源时自动重新生成二维码（二维码会话与设备源无关，但重新生成更稳）。
-watch(qrSource, () => {
-  if (qrDialog.value && qrKind.value === 'm115') {
-    void genQrcode()
-  }
-})
-
 onUnmounted(stopQrPoll)
 onUnmounted(stopAliyunQrPoll)
 onUnmounted(stopAliyunWebQrPoll)
@@ -385,8 +378,8 @@ async function openAuthorize() {
 
 /// Aliyun Drive refresh_token: jump to the alistgo official token page.
 // --- Aliyun Drive open token QR login (xiaoya dual channel) ---// The channel (messense / xiaoya) determines which hosted OAuth issues the
-// refresh_token; the issuer's refresh endpoint is stored into
-// `oauth_token_url` so runtime refresh stays in-channel.
+// refresh_token; the channel is recorded into `qr_channel` so runtime
+// refresh stays in-channel.
 const aliyunQrDialog = ref(false)
 const aliyunQrSvg = ref('')
 const aliyunQrSid = ref('')
@@ -423,10 +416,6 @@ async function genAliyunQrcode() {
             authCode: s.auth_code,
           })
           form.value.refresh_token = t.refresh_token
-          if (isAliyunDrive.value || isAliyunDrive115.value) {
-            // 扫码通道记入 addition.qr_channel；刷新端点由后端按通道自动选择
-            form.value.qr_channel = form.value.qr_channel || 'messense'
-          }
           stopAliyunQrPoll()
           aliyunQrDialog.value = false
           message.success('扫码成功，refresh_token 已自动填入')
@@ -550,7 +539,6 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_drive') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      oauth_token_url: form.value.oauth_token_url.trim(),
       qr_channel: form.value.qr_channel.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
       drive_type: form.value.drive_type.trim() || 'resource',
@@ -569,7 +557,6 @@ function buildAddition(): Record<string, unknown> {
   if (form.value.driver === 'aliyun_drive_115') {
     return {
       refresh_token: form.value.refresh_token.trim(),
-      oauth_token_url: form.value.oauth_token_url.trim(),
       qr_channel: form.value.qr_channel.trim(),
       root_folder_id: form.value.root_folder_id.trim() || 'root',
       drive_type: form.value.drive_type.trim() || 'resource',
@@ -601,6 +588,13 @@ function buildAddition(): Record<string, unknown> {
 async function save() {
   if (!form.value.mount_path.trim()) {
     message.warning('请填写挂载路径')
+    return
+  }
+  if (
+    (form.value.driver === 'aliyun_drive' || form.value.driver === 'aliyun_drive_115') &&
+    !form.value.qr_channel.trim()
+  ) {
+    message.warning('请选择扫码通道（messense / xiaoya）')
     return
   }
   if (form.value.driver === 'baidu_netdisk' && !form.value.refresh_token.trim()) {
@@ -905,10 +899,6 @@ onMounted(async () => {
               placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
             />
           </NFormItem>
-          <p class="storage-quark-tip">
-            浏览器登录 <code>pan.quark.cn</code> → F12 → Application → Cookies 全选复制（形如
-            <code>xxx=yyy; zzz=aaa</code>）；或点右上角「扫码获取」用夸克 App 自动获取。
-          </p>
           <NFormItem label="root_id（挂载根目录 fid）">
             <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
           </NFormItem>
@@ -935,13 +925,18 @@ onMounted(async () => {
               placeholder="登录 pan.quark.cn 后，按 F12 → Application → Cookies 复制全部 Cookie 粘贴到这里"
             />
           </NFormItem>
-          <p class="storage-quark-tip">
-            分享浏览无需登录，但<strong>下载需要 Cookie</strong>。浏览器登录 <code>pan.quark.cn</code> → F12 →
-            Application → Cookies 全选复制，或点右上角「扫码获取」用夸克 App 自动获取。
-          </p>
         </template>
 
         <template v-else-if="isM115">
+          <NFormItem label="扫码设备（相同设备仅最新 Cookie 生效）">
+            <NSelect
+              v-model:value="form.qr_source"
+              :options="m115QrSourceOptions"
+              clearable
+              size="small"
+              placeholder="未选择（默认 115生活·支付宝小程序）"
+            />
+          </NFormItem>
           <NFormItem label="Cookie">
             <template #label>
               <div class="storage-cookie-label">
@@ -956,21 +951,8 @@ onMounted(async () => {
               placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
             />
           </NFormItem>
-          <p class="storage-quark-tip">
-            浏览器登录 <code>115.com</code> → F12 → Application → Cookies 全选复制（形如
-            <code>UID=xxx; CID=yyy; SEID=zzz</code>）；或点右上角「扫码获取」用 115 App 自动获取。
-          </p>
           <NFormItem label="root_id（挂载根目录 cid）">
             <NInput v-model:value="form.root_id" placeholder="0 = 网盘根目录" />
-          </NFormItem>
-          <NFormItem label="扫码设备源（记录）">
-            <NSelect
-              v-model:value="form.qr_source"
-              :options="m115QrSourceOptions"
-              clearable
-              size="small"
-              placeholder="未记录（扫码获取时自动填写）"
-            />
           </NFormItem>
         </template>
 
@@ -984,6 +966,15 @@ onMounted(async () => {
           <NFormItem label="提取码（非必填）">
             <NInput v-model:value="form.receive_code" placeholder="分享链接未带 password 时使用此提取码" />
           </NFormItem>
+          <NFormItem label="扫码设备（相同设备仅最新 Cookie 生效）">
+            <NSelect
+              v-model:value="form.qr_source"
+              :options="m115QrSourceOptions"
+              clearable
+              size="small"
+              placeholder="未选择（默认 115生活·支付宝小程序）"
+            />
+          </NFormItem>
           <NFormItem label="Cookie">
             <template #label>
               <div class="storage-cookie-label">
@@ -996,20 +987,6 @@ onMounted(async () => {
               type="textarea"
               :autosize="{ minRows: 4, maxRows: 8 }"
               placeholder="登录 115.com 后，按 F12 → Application → Cookies 复制（需含 UID/CID/SEID）"
-            />
-          </NFormItem>
-          <p class="storage-quark-tip">
-            分享浏览无需登录，但<strong>下载需要 Cookie</strong>。浏览器登录 <code>115.com</code> → F12 → Application →
-            Cookies 全选复制（形如 <code>UID=xxx; CID=yyy; SEID=zzz</code>），或点右上角「扫码获取」用 115 App
-            自动获取。
-          </p>
-          <NFormItem label="扫码设备源（记录）">
-            <NSelect
-              v-model:value="form.qr_source"
-              :options="m115QrSourceOptions"
-              clearable
-              size="small"
-              placeholder="未记录（扫码获取时自动填写）"
             />
           </NFormItem>
         </template>
@@ -1025,10 +1002,6 @@ onMounted(async () => {
               clearable
               placeholder="未设置（兼容旧配置）"
             />
-            <template #feedback
-              >扫码时自动记录所选通道，token 刷新走同一通道；通道由不同托管方签发
-              refresh_token，修改后需重新扫码。</template
-            >
           </NFormItem>
           <NFormItem label="阿里云盘 refresh_token">
             <template #label>
@@ -1044,11 +1017,6 @@ onMounted(async () => {
               placeholder="粘贴阿里云盘开放平台 refresh_token（网页授权后获取，形如 1A2B... 较长）"
             />
           </NFormItem>
-          <p class="storage-quark-tip">
-            <strong>获取方式：</strong>点右上角「扫码获取」，用阿里云盘 App 扫码授权后自动回填 refresh_token
-            并按上方的扫码通道记录（messense.me / xiaoya.pro，token 刷新自动走同一通道）；也可在
-            <code>https://openapi.alipan.com/oauth/authorize</code> 授权获取后手动粘贴。
-          </p>
           <NFormItem label="云盘类型（drive_type）">
             <NSelect
               v-model:value="form.drive_type"
@@ -1108,11 +1076,6 @@ onMounted(async () => {
               placeholder="粘贴你自己的阿里云盘 refresh_token（分享文件需转存到你的盘）"
             />
           </NFormItem>
-          <p class="storage-quark-tip">
-            <strong>获取方式：</strong>点右上角「扫码获取」，用阿里云盘 App 扫码后自动回填网页版 refresh_token；
-            此驱动需要<strong>网页版 token</strong>（与「阿里云盘」驱动使用的 open token 不同）， 也可浏览器登录
-            <code>alipan.com</code> 后在开发者工具中复制。
-          </p>
           <p class="storage-quark-tip">
             <strong>注意：</strong>分享文件无 SHA1，下载前会先 <code>v2/file/copy</code> 转存到你自己的阿里云盘
             （默认根目录，见下方「转存目录」），再从自己的盘取直链下载。
@@ -1245,17 +1208,12 @@ onMounted(async () => {
       <p class="storage-quark-tip">
         <template v-if="qrKind === 'm115'">
           请使用<strong>115 App</strong> 扫码登录（手机端需已登录账号），扫码后请在手机上确认登录，成功后自动填入
-          Cookie。<br />
-          <strong>注意：</strong>115 Cookie <strong>相同扫码设备仅最后一次可用</strong>——同一设备源每次扫码都会使
-          之前获取的 Cookie 失效（不同设备源互不影响），请扫码后立即使用或确认。
+          Cookie。
         </template>
         <template v-else>
           请使用<strong>夸克 App</strong> 扫码登录（手机端需已登录账号），扫码成功后将自动填入 Cookie。
         </template>
       </p>
-      <NFormItem v-if="qrKind === 'm115'" label="扫码设备">
-        <NSelect v-model:value="qrSource" :options="m115QrSourceOptions" size="small" />
-      </NFormItem>
       <div class="qr-box">
         <img
           v-if="qrSvg"

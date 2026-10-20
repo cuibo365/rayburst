@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::aliyun_open::{
-    default_drive_type, default_oauth_url, default_root, AliyunOpenAddition, AliyunOpenDriver,
+    default_drive_type, default_root, AliyunOpenAddition, AliyunOpenDriver,
 };
 use crate::error::AppError;
 use crate::commands::m115_crypto;
@@ -32,8 +32,6 @@ pub struct AliyunDrive115Addition {
     /// Alipan drive: default / resource / backup.
     #[serde(default = "default_drive_type")]
     pub drive_type: String,
-    #[serde(default = "default_oauth_url")]
-    pub oauth_token_url: String,
     /// QR login channel (`messense` / `xiaoya`) recorded at scan time; the
     /// embedded open driver auto-selects the channel's refresh endpoint.
     #[serde(default)]
@@ -125,7 +123,6 @@ impl AliyunDrive115Driver {
                 drive_type: self.addition.drive_type.clone(),
                 order_by: String::new(),
                 order_direction: String::new(),
-                oauth_token_url: self.addition.oauth_token_url.clone(),
                 qr_channel: self.addition.qr_channel.clone(),
                 access_token: self.addition.access_token.clone(),
                 token_expires_at: self.addition.token_expires_at,

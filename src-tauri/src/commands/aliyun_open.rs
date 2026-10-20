@@ -1,7 +1,7 @@
 //! Aliyun Drive (open platform) driver — port of alist `drivers/aliyundrive_open`.
 //!
-//! - token refresh: hosted renew endpoint (messense / xiaoya / alist-go),
-//!   with a bare refresh_token).
+//! - token refresh: hosted renew endpoint chosen by the QR channel
+//!   (messense / xiaoya), with a bare refresh_token).
 //! - drive info: `POST /adrive/v1.0/user/getDriveInfo` → `default_drive_id`.
 //! - list: `POST /adrive/v1.0/openFile/list` (marker pagination, limit 200).
 //! - download: `POST /adrive/v1.0/openFile/getDownloadUrl` → CDN url.
@@ -36,10 +36,6 @@ pub fn default_root() -> String {
     "root".into()
 }
 
-pub fn default_oauth_url() -> String {
-    "https://api.alistgo.com/alist/ali_open/token".into()
-}
-
 /// alist `DriveType` default (meta.go): `resource` = non-backup files.
 pub fn default_drive_type() -> String {
     "resource".into()
@@ -62,12 +58,8 @@ pub struct AliyunOpenAddition {
     /// ASC / DESC.
     #[serde(default)]
     pub order_direction: String,
-    /// Hosted renew endpoint used when client_id/client_secret are empty.
-    #[serde(default = "default_oauth_url")]
-    pub oauth_token_url: String,
-    /// QR login channel (`messense` / `xiaoya`) recorded at scan time. When
-    /// set, `ensure_access_token` auto-selects the channel's refresh endpoint
-    /// regardless of `oauth_token_url` (kept for legacy/custom configs).
+    /// QR login channel (`messense` / `xiaoya`) recorded at scan time;
+    /// `ensure_access_token` selects the channel's refresh endpoint from it.
     #[serde(default)]
     pub qr_channel: String,
     // ---- runtime token cache (persisted so a renewed refresh_token survives) ----
@@ -133,30 +125,14 @@ impl AliyunOpenDriver {
         {
             return Ok(self.addition.access_token.clone());
         }
-        // QR 扫码通道优先：messense / xiaoya 的刷新端点固定，不依赖
-        // oauth_token_url（该字段保留兼容旧配置，表单已隐藏）。
-        if !self.addition.qr_channel.is_empty() {
-            match self.addition.qr_channel.as_str() {
-                "messense" => {
-                    self.addition.oauth_token_url =
-                        "https://aliyundrive-oauth.messense.me/oauth/access_token".to_string();
-                }
-                "xiaoya" => {
-                    self.addition.oauth_token_url =
-                        "http://auth.xiaoya.pro/api/ali_open/refresh".to_string();
-                }
-                _ => {}
-            }
-        }
+        // 刷新端点由扫码通道决定（messense / xiaoya），不再支持自定义托管。
         let client = Self::http_client()?;
         let json: serde_json::Value;
-        if !self.addition.oauth_token_url.is_empty() {
-            let renew_url = self.addition.oauth_token_url.clone();
-            let renew_lower = renew_url.to_ascii_lowercase();
-            if renew_lower.contains("messense.me") {
+        match self.addition.qr_channel.as_str() {
+            "messense" => {
                 // messense hosted OAuth: standard token endpoint, no client fields.
                 let resp = client
-                    .post(&renew_url)
+                    .post("https://aliyundrive-oauth.messense.me/oauth/access_token")
                     .json(&serde_json::json!({
                         "grant_type": "refresh_token",
                         "refresh_token": self.addition.refresh_token,
@@ -168,11 +144,12 @@ impl AliyunOpenDriver {
                     .json()
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("解析 messense 刷新响应失败: {e}")))?;
-            } else if renew_lower.contains("xiaoya.pro") {
+            }
+            "xiaoya" => {
                 // xiaoya hosted OAuth: same shape as its auth_code exchange
                 // (empty client fields included).
                 let resp = client
-                    .post(&renew_url)
+                    .post("http://auth.xiaoya.pro/api/ali_open/refresh")
                     .json(&serde_json::json!({
                         "client_id": "",
                         "client_secret": "",
@@ -186,51 +163,12 @@ impl AliyunOpenDriver {
                     .json()
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("解析 xiaoya 刷新响应失败: {e}")))?;
-            } else {
-                // Hosted renew (alist-compatible). alist first GETs
-                // `?refresh_ui=<token>&server_use=true&driver_txt=alicloud_qr`; alistgo
-                // now rejects that form with "Incorrect GrantType", so on any error
-                // body we fall back to POSTing the token to the same URL (alist
-                // `refreshTokenWithPost`): {client_id, client_secret, grant_type,
-                // refresh_token} — client_id/secret may be empty.
-                let get_url = format!(
-                    "{}?refresh_ui={}&server_use=true&driver_txt=alicloud_qr",
-                    renew_url,
-                    urlencoding::encode(&self.addition.refresh_token)
-                );
-                let resp = client
-                    .get(&get_url)
-                    .send()
-                    .await
-                    .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
-                let get_json: serde_json::Value = resp
-                    .json()
-                    .await
-                    .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
-                if get_json["access_token"].as_str().is_some() {
-                    json = get_json;
-                } else {
-                    let resp = client
-                        .post(&renew_url)
-                        .json(&serde_json::json!({
-                            "client_id": "",
-                            "client_secret": "",
-                            "grant_type": "refresh_token",
-                            "refresh_token": self.addition.refresh_token,
-                        }))
-                        .send()
-                        .await
-                        .map_err(|e| AppError::CloudDrive(format!("调用托管刷新接口失败: {e}")))?;
-                    json = resp
-                        .json()
-                        .await
-                        .map_err(|e| AppError::CloudDrive(format!("解析托管刷新响应失败: {e}")))?;
-                }
             }
-        } else {
-            return Err(AppError::CloudDrive(
-                "缺少阿里云盘托管刷新地址（oauth_token_url），无法刷新 token".into(),
-            ));
+            other => {
+                return Err(AppError::CloudDrive(format!(
+                    "阿里云盘扫码通道未设置或无效（{other:?}），请重新编辑该存储并扫码获取 refresh_token"
+                )));
+            }
         }
         let access = json["access_token"]
             .as_str()
