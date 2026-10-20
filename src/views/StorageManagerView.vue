@@ -317,6 +317,7 @@ function onSyncPick(v: number | null) {
 
 function onDriverChange() {
   // Re-apply driver defaults whenever the driver switches (or is first picked).
+  form.value.refresh_token = ''
   form.value.client_id = ''
   form.value.client_secret = ''
   form.value.root_path = '/'
@@ -945,7 +946,7 @@ onMounted(async () => {
         </NFormItem>
 
         <template v-if="isBaidu">
-          <NFormItem label="refresh_token">
+          <NFormItem label="refresh_token" label-style="width: 100%">
             <template #label>
               <div class="storage-cookie-label">
                 <span>refresh_token</span>
@@ -974,7 +975,7 @@ onMounted(async () => {
         </template>
 
         <template v-else-if="isQuark">
-          <NFormItem label="Cookie">
+          <NFormItem label="Cookie" label-style="width: 100%">
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
@@ -1001,7 +1002,7 @@ onMounted(async () => {
           <NFormItem label="提取码（非必填）">
             <NInput v-model:value="form.passcode" placeholder="分享链接未带 pwd 时使用此提取码" />
           </NFormItem>
-          <NFormItem label="Cookie">
+          <NFormItem label="Cookie" label-style="width: 100%">
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
@@ -1028,7 +1029,7 @@ onMounted(async () => {
               placeholder="未选择（默认 115生活·支付宝小程序）"
             />
           </NFormItem>
-          <NFormItem label="Cookie">
+          <NFormItem label="Cookie" label-style="width: 100%">
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
@@ -1067,7 +1068,7 @@ onMounted(async () => {
               placeholder="未选择（默认 115生活·支付宝小程序）"
             />
           </NFormItem>
-          <NFormItem label="Cookie">
+          <NFormItem label="Cookie" label-style="width: 100%">
             <template #label>
               <div class="storage-cookie-label">
                 <span>Cookie</span>
@@ -1096,7 +1097,7 @@ onMounted(async () => {
               placeholder="未设置（兼容旧配置）"
             />
           </NFormItem>
-          <NFormItem label="阿里云盘 refresh_token">
+          <NFormItem label="阿里云盘 refresh_token" label-style="width: 100%">
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
@@ -1134,7 +1135,7 @@ onMounted(async () => {
                 placeholder="未选择（默认 115生活·支付宝小程序）"
               />
             </NFormItem>
-            <NFormItem label="115 Cookie">
+            <NFormItem label="115 Cookie" label-style="width: 100%">
               <template #label>
                 <div class="storage-cookie-label">
                   <span>115 Cookie</span>
@@ -1166,7 +1167,7 @@ onMounted(async () => {
           <NFormItem label="提取码（非必填）">
             <NInput v-model:value="form.passcode" placeholder="分享链接未带 pwd 时使用此提取码" />
           </NFormItem>
-          <NFormItem label="阿里云盘 refresh_token">
+          <NFormItem label="阿里云盘 refresh_token" label-style="width: 100%">
             <template #label>
               <div class="storage-cookie-label">
                 <span>阿里云盘 refresh_token</span>
@@ -1210,7 +1211,7 @@ onMounted(async () => {
                 placeholder="未选择（默认 115生活·支付宝小程序）"
               />
             </NFormItem>
-            <NFormItem label="115 Cookie">
+            <NFormItem label="115 Cookie" label-style="width: 100%">
               <template #label>
                 <div class="storage-cookie-label">
                   <span>115 Cookie</span>
@@ -1443,13 +1444,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  width: 100%;
-}
-/* NFormItem 的 label 容器默认不是全宽，撑满后按钮组才能真正右对齐 */
-.storage-dialog :deep(.n-form-item-label) {
-  width: 100%;
-}
-.storage-dialog :deep(.n-form-item-label) .storage-cookie-label {
   width: 100%;
 }
 .qr-box {
