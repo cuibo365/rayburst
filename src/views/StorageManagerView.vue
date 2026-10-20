@@ -1442,10 +1442,14 @@ onMounted(async () => {
 .storage-cookie-label {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   width: 100%;
   flex: 1;
+}
+/* 三个子项会被 space-between 分散（按钮悬中间）；改用文字 margin-right:auto
+   吃掉剩余空间，两个按钮一起贴右紧挨 */
+.storage-cookie-label > span:first-child {
+  margin-right: auto;
 }
 .qr-box {
   display: flex;
