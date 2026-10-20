@@ -1183,12 +1183,9 @@ onMounted(async () => {
             />
           </NFormItem>
           <p class="storage-quark-tip">
-            <strong>注意：</strong>分享文件无 SHA1，下载前会先 <code>v2/file/copy</code> 转存到你自己的阿里云盘
-            （默认根目录，见下方「转存目录」），再从自己的盘取直链下载。
+            <strong>注意：</strong>分享文件无 SHA1，下载前会先 <code>v2/file/copy</code> 转存到你自己的阿里云盘 （资源盘
+            /xiaoya，不存在会自动创建），再从自己的盘取直链下载。
           </p>
-          <NFormItem v-if="isAliyunShare" label="转存目录（open_copy_dir）">
-            <NInput v-model:value="form.open_copy_dir" placeholder="root = 网盘根目录，也可填文件夹 file_id" />
-          </NFormItem>
           <NFormItem v-if="isAliyunShare" label="自己的网盘 drive_id（可选）">
             <NInput
               v-model:value="form.own_drive_id"
@@ -1196,12 +1193,6 @@ onMounted(async () => {
             />
           </NFormItem>
           <template v-if="isAliyunShare115">
-            <NFormItem label="转存目录（open_copy_dir）">
-              <NInput
-                v-model:value="form.open_copy_dir"
-                placeholder="root = 网盘根目录，也可填文件夹 file_id（留空自动转存到资源库盘根目录）"
-              />
-            </NFormItem>
             <NFormItem label="扫码设备（相同设备仅最新 Cookie 生效）">
               <NSelect
                 v-model:value="form.qr_source"

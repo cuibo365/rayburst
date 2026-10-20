@@ -17,6 +17,9 @@ use crate::database::Database;
 
 const ALIYUN_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const CANARY_HEADER_VALUE: &str = "client=web,app=share,version=v2.3.1";
+/// Default name of the auto-created resource-drive folder used as the copy
+/// target for share transfers (created on first use, reused afterwards).
+pub(crate) const AUTO_COPY_DIR: &str = "xiaoya";
 
 /// Aliyun share addition (persisted in `cloud_storages.addition`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +55,10 @@ pub struct AliyunShareAddition {
     /// or the own-drive listing.
     #[serde(default)]
     pub own_drive_id: String,
+    /// Cached file_id of the auto-created xiaoya copy dir (learned once,
+    /// reused afterwards; cleared and re-learned if the folder vanishes).
+    #[serde(default)]
+    pub copy_dir_id: String,
 }
 
 fn default_copy_dir() -> String {
@@ -422,17 +429,29 @@ impl AliyunShareDriver {
                 "阿里分享 drive_id 为空，请先浏览一次分享目录".into(),
             ));
         }
-        let copy_dir = {
-            let d = self.addition.open_copy_dir.trim();
-            if d.is_empty() {
-                "root".to_string()
-            } else {
-                d.to_string()
-            }
-        };
         let client = Self::http_client()?;
         // The copy request needs our own drive id up front.
         let own_drive = self.ensure_own_drive_id(&client, &access).await?;
+        // Default copy target: the resource-drive folder named xiaoya,
+        // auto-created when missing. A legacy explicit open_copy_dir (not
+        // "root") is still honored. The learned file_id is persisted so it is
+        // reused (no listing round-trip) on later downloads.
+        let mut copy_dir;
+        let dir_changed = {
+            let d = self.addition.open_copy_dir.trim();
+            if d.is_empty() || d == "root" {
+                let (fid, changed) =
+                    self.ensure_copy_dir(&client, &access, &own_drive).await?;
+                copy_dir = fid;
+                changed
+            } else {
+                copy_dir = d.to_string();
+                false
+            }
+        };
+        if dir_changed {
+            self.persist(db).await?;
+        }
         let mut result = Vec::new();
         for file in files {
             if file.isdir || file.id.is_empty() {
@@ -449,8 +468,10 @@ impl AliyunShareDriver {
                 own_file_id = fid;
                 own_file_drive = did;
             } else {
-                // 1) copy the share file into the own drive
-                let copy_json = self
+                // 1) copy the share file into the own drive. If the copy fails
+                // and we were using the auto xiaoya dir, the folder may have
+                // been deleted: clear the cached id, re-learn and retry once.
+                let mut copy_result = self
                     .copy_to_own(
                         &client,
                         &access,
@@ -461,7 +482,33 @@ impl AliyunShareDriver {
                         &copy_dir,
                         file,
                     )
-                    .await?;
+                    .await;
+                if copy_result.is_err()
+                    && !self.addition.copy_dir_id.is_empty()
+                {
+                    self.addition.copy_dir_id.clear();
+                    self.persist(db).await?;
+                    let d = self.addition.open_copy_dir.trim();
+                    if d.is_empty() || d == "root" {
+                        let (fid, _) =
+                            self.ensure_copy_dir(&client, &access, &own_drive).await?;
+                        copy_dir = fid;
+                        self.persist(db).await?;
+                    }
+                    copy_result = self
+                        .copy_to_own(
+                            &client,
+                            &access,
+                            &share_token,
+                            &self.addition.share_id,
+                            &drive_id,
+                            &own_drive,
+                            &copy_dir,
+                            file,
+                        )
+                        .await;
+                }
+                let copy_json = copy_result?;
                 // The 202 copy response carries the destination file id and
                 // drive id at the top level (older replies use `tasks[0]`).
                 own_file_id = copy_json["file_id"]
@@ -594,6 +641,95 @@ impl AliyunShareDriver {
             .to_string();
         self.addition.own_drive_id = drive_id.clone();
         Ok(drive_id)
+    }
+
+    /// Resolve the default copy target under the resource-drive root: the
+    /// folder named [`AUTO_COPY_DIR`], created on first use and reused
+    /// afterwards. Returns its file_id. pub(crate): also used by
+    /// `aliyun_share_115` (web-domain only, no open).
+    pub(crate) async fn ensure_copy_dir(
+        &mut self,
+        client: &reqwest::Client,
+        access: &str,
+        own_drive: &str,
+    ) -> Result<(String, bool), AppError> {
+        // cached id: reuse without an extra listing round-trip
+        if !self.addition.copy_dir_id.is_empty() {
+            return Ok((self.addition.copy_dir_id.clone(), false));
+        }
+        // 1) look for the folder at the resource-drive root
+        let resp = client
+            .post("https://api.alipan.com/v2/file/list")
+            .header("Authorization", format!("Bearer {access}"))
+            .json(&serde_json::json!({
+                "drive_id": own_drive,
+                "parent_file_id": "root",
+                "limit": 200,
+                "marker": "",
+            }))
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("请求资源盘根目录失败: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("读取资源盘根目录失败: {e}")))?;
+        if !status.is_success() {
+            let body = text.chars().take(300).collect::<String>();
+            return Err(AppError::CloudDrive(format!(
+                "请求资源盘根目录失败（HTTP {status}）：{body}"
+            )));
+        }
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| AppError::CloudDrive(format!("解析资源盘根目录失败: {e}")))?;
+        for item in json["items"].as_array().cloned().unwrap_or_default() {
+            if item["name"].as_str() == Some(AUTO_COPY_DIR)
+                && item["type"].as_str() == Some("folder")
+            {
+                if let Some(fid) = item["file_id"].as_str() {
+                    self.addition.copy_dir_id = fid.to_string();
+                    return Ok((fid.to_string(), true));
+                }
+            }
+        }
+        // 2) not found → create it
+        let resp = client
+            .post("https://api.alipan.com/v2/file/create")
+            .header("Authorization", format!("Bearer {access}"))
+            .json(&serde_json::json!({
+                "drive_id": own_drive,
+                "parent_file_id": "root",
+                "name": AUTO_COPY_DIR,
+                "type": "folder",
+                "check_name_mode": "refuse",
+            }))
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("创建目录 {} 失败: {e}", AUTO_COPY_DIR)))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("读取创建目录响应失败: {e}")))?;
+        if !status.is_success() {
+            let body = text.chars().take(300).collect::<String>();
+            return Err(AppError::CloudDrive(format!(
+                "创建目录 {} 失败（HTTP {status}）：{body}",
+                AUTO_COPY_DIR
+            )));
+        }
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| AppError::CloudDrive(format!("解析创建目录响应失败: {e}")))?;
+        let file_id = json["file_id"].as_str().map(str::to_string).ok_or_else(|| {
+            AppError::CloudDrive(format!(
+                "创建目录 {} 响应缺少 file_id: {}",
+                AUTO_COPY_DIR,
+                text.chars().take(300).collect::<String>()
+            ))
+        })?;
+        self.addition.copy_dir_id = file_id.clone();
+        Ok((file_id, true))
     }
 
     /// v2/file/copy: 把分享文件转存到自己的云盘（网页域 token）。

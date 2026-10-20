@@ -70,6 +70,10 @@ pub struct AliyunShare115Addition {
     /// `user.aliyundrive.com/v2/user/get` and cached here.
     #[serde(default)]
     pub own_drive_id: String,
+    /// Cached file_id of the auto-created xiaoya copy dir (synced from the
+    /// inner share driver; reused across downloads).
+    #[serde(default)]
+    pub copy_dir_id: String,
     #[serde(default)]
     pub user_id: i64,
 }
@@ -188,6 +192,7 @@ impl AliyunShare115Driver {
                 share_token_expires_at: self.addition.share_token_expires_at,
                 drive_id: String::new(),
                 own_drive_id: self.addition.own_drive_id.clone(),
+                copy_dir_id: self.addition.copy_dir_id.clone(),
             },
         }
     }
@@ -200,6 +205,7 @@ impl AliyunShare115Driver {
         self.addition.share_token = share.addition.share_token.clone();
         self.addition.share_token_expires_at = share.addition.share_token_expires_at;
         self.addition.own_drive_id = share.addition.own_drive_id.clone();
+        self.addition.copy_dir_id = share.addition.copy_dir_id.clone();
     }
 
     /// List the share tree.
@@ -275,14 +281,27 @@ impl AliyunShare115Driver {
             let _ = share.list(db, "root").await?;
             share_drive = share.addition.drive_id.clone();
         }
-        let copy_dir = {
+        // Default copy target: the resource-drive folder named xiaoya,
+        // auto-created when missing. A legacy explicit open_copy_dir (not
+        // "root") is still honored. The learned file_id is persisted so it is
+        // reused (no listing round-trip) on later downloads.
+        let mut copy_dir;
+        let dir_changed = {
             let d = self.addition.open_copy_dir.trim();
-            if d.is_empty() {
-                "root".to_string()
+            if d.is_empty() || d == "root" {
+                let (fid, changed) =
+                    share.ensure_copy_dir(&client, &access, &own_drive).await?;
+                copy_dir = fid;
+                changed
             } else {
-                d.to_string()
+                copy_dir = d.to_string();
+                false
             }
         };
+        if dir_changed {
+            self.sync_caches(&share);
+            self.persist(db).await?;
+        }
         let share_token = share.addition.share_token.clone();
         // The copy API lives on api.alipan.com (share domain) — it wants the
         // token issued by auth.alipan.com, not the open-platform token.
@@ -306,19 +325,49 @@ impl AliyunShare115Driver {
             let (_copy_id, sha1) = if let Some(found) = pre_existing {
                 found
             } else {
-                // 1) copy the share file into the own drive
-                self.copy_to_own(
-                    &client,
-                    &share_access,
-                    &share_token,
-                    &share_id,
-                    &share_drive,
-                    &own_drive,
-                    &copy_dir,
-                    &file.id,
-                    &file.name,
-                )
-                .await?;
+                // 1) copy the share file into the own drive. If the copy
+                // fails and we were using the auto xiaoya dir, the folder may
+                // have been deleted: clear the cached id, re-learn and retry
+                // once.
+                let mut copy_result = self
+                    .copy_to_own(
+                        &client,
+                        &share_access,
+                        &share_token,
+                        &share_id,
+                        &share_drive,
+                        &own_drive,
+                        &copy_dir,
+                        &file.id,
+                        &file.name,
+                    )
+                    .await;
+                if copy_result.is_err() && !share.addition.copy_dir_id.is_empty() {
+                    share.addition.copy_dir_id.clear();
+                    let d = self.addition.open_copy_dir.trim();
+                    if d.is_empty() || d == "root" {
+                        let (fid, _) = share
+                            .ensure_copy_dir(&client, &access, &own_drive)
+                            .await?;
+                        copy_dir = fid;
+                    }
+                    self.sync_caches(&share);
+                    self.persist(db).await?;
+                    copy_result = self
+                        .copy_to_own(
+                            &client,
+                            &share_access,
+                            &share_token,
+                            &share_id,
+                            &share_drive,
+                            &own_drive,
+                            &copy_dir,
+                            &file.id,
+                            &file.name,
+                        )
+                        .await;
+                }
+                copy_result?;
                 // 2) find the copied file in the own drive → SHA1 (web-domain)
                 self.find_copied(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
                     .await?
