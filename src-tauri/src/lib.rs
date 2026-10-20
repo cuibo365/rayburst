@@ -784,6 +784,8 @@ pub fn run() {
             commands::cloud_storage_update,
             commands::cloud_storage_delete,
             commands::cloud_storage_toggle,
+            commands::cloud_storage_export,
+            commands::cloud_storage_import,
             commands::cloud_drive_list_path,
             commands::cloud_drive_storage_download,
             commands::cloud_drive_share_list,

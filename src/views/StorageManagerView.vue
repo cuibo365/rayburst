@@ -20,9 +20,17 @@ import {
   NTable,
   useMessage,
 } from 'naive-ui'
-import { AddOutline, CreateOutline, RefreshOutline, TrashOutline } from '@vicons/ionicons5'
+import {
+  AddOutline,
+  CloudUploadOutline,
+  CreateOutline,
+  DownloadOutline,
+  RefreshOutline,
+  TrashOutline,
+} from '@vicons/ionicons5'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
 
 interface CloudStorage {
   id: number
@@ -774,6 +782,55 @@ async function save() {
   }
 }
 
+// 导出全部存储为 JSON（仅业务字段，导入时重建本地字段）
+async function exportStorages() {
+  if (storages.value.length === 0) {
+    message.warning('当前没有可导出的存储')
+    return
+  }
+  try {
+    const path = await saveDialog({
+      title: '导出存储配置',
+      defaultPath: `rayburst-storages-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    })
+    if (!path) return
+    await invoke('cloud_storage_export', { path })
+    message.success(`已导出 ${storages.value.length} 个存储`)
+  } catch (e) {
+    message.error(errMsg(e))
+  }
+}
+
+// 从 JSON 文件导入存储；挂载路径已存在的条目自动跳过
+async function importStorages() {
+  try {
+    const path = await openDialog({
+      title: '导入存储配置',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    })
+    if (!path || typeof path !== 'string') return
+    const r = await invoke<{
+      imported: number
+      skipped: { mount_path: string; reason: string }[]
+    }>('cloud_storage_import', { path })
+    if (r.imported > 0) message.success(`已导入 ${r.imported} 个存储`)
+    if (r.skipped.length > 0) {
+      const first = r.skipped
+        .slice(0, 3)
+        .map((s) => `${s.mount_path || '(无名)'}：${s.reason}`)
+        .join('；')
+      message.warning(`跳过 ${r.skipped.length} 个：${first}${r.skipped.length > 3 ? '…' : ''}`)
+    }
+    if (r.imported === 0 && r.skipped.length === 0) message.info('文件中没有可导入的存储')
+    await load()
+  } catch (e) {
+    message.error(errMsg(e))
+  }
+}
+
 async function toggleDisabled(s: CloudStorage) {
   try {
     await invoke('cloud_storage_toggle', { id: s.id, disabled: !s.disabled })
@@ -827,6 +884,18 @@ onMounted(async () => {
             ><NIcon><RefreshOutline /></NIcon
           ></template>
           刷新
+        </NButton>
+        <NButton size="small" secondary @click="exportStorages">
+          <template #icon
+            ><NIcon><DownloadOutline /></NIcon
+          ></template>
+          导出
+        </NButton>
+        <NButton size="small" secondary @click="importStorages">
+          <template #icon
+            ><NIcon><CloudUploadOutline /></NIcon
+          ></template>
+          导入
         </NButton>
         <NButton size="small" type="primary" @click="openAdd">
           <template #icon
