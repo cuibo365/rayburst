@@ -469,6 +469,78 @@ pub async fn find_pickcode_by_sha1(
     Ok(None)
 }
 
+/// Look up a pickcode in a 115 directory by file name (+ size) — used by the
+/// aliyun-share→115 driver to reuse an already-flashed file directly instead
+/// of running the copy→SHA1→flash chain again. Matching name AND size avoids
+/// picking a same-named file with different content.
+pub async fn find_pickcode_by_name(
+    cookie: &str,
+    ua: &str,
+    dir_id: &str,
+    name: &str,
+    size: u64,
+) -> Result<Option<String>, AppError> {
+    if name.trim().is_empty() {
+        return Ok(None);
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(ua)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::CloudDrive(format!("无法创建 HTTP 客户端: {e}")))?;
+    let mut offset = 0u64;
+    const PAGE: u64 = 100;
+    loop {
+        let url = format!(
+            "{API_DIR_FILES}?cid={}&limit={PAGE}&offset={offset}&o=user_ptime&asc=0&fc_mix=0&format=json",
+            dir_id.trim()
+        );
+        let resp = client
+            .get(&url)
+            .header("Cookie", cookie)
+            .send()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("列出 115 目录失败: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| AppError::CloudDrive(format!("读取 115 目录响应失败: {e}")))?;
+        if !status.is_success() {
+            return Err(AppError::CloudDrive(format!(
+                "列出 115 目录失败（HTTP {status}）：{}",
+                text.chars().take(200).collect::<String>()
+            )));
+        }
+        let j: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| AppError::CloudDrive(format!("解析 115 目录响应失败: {e}")))?;
+        let items = j["data"].as_array().cloned().unwrap_or_default();
+        for item in &items {
+            if item["n"].as_str() != Some(name) {
+                continue;
+            }
+            if let Some(sz) = item["s"].as_u64() {
+                if sz != size {
+                    // same name but different size — not the same file
+                    continue;
+                }
+            }
+            if let Some(pc) = item["pc"].as_str().filter(|s| !s.is_empty()) {
+                return Ok(Some(pc.to_string()));
+            }
+            // matched name+size but no pickcode (folder / unavailable) — skip
+        }
+        if (items.len() as u64) < PAGE {
+            break;
+        }
+        offset += PAGE;
+        if offset > 5000 {
+            break;
+        }
+    }
+    Ok(None)
+}
+
 /// Fetch the 115 upload userkey for this cookie via app/uploadinfo.
 ///
 /// The userkey participates in the rapid-upload `sig` (first round) AND is

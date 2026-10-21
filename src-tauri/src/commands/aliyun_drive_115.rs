@@ -211,19 +211,9 @@ impl AliyunDrive115Driver {
                     file.name
                 )));
             }
-            // filename with a timestamp suffix avoids name collisions in the
-            // 115 target dir (same convention as xiaoya ali2115).
-            let ts = chrono::Local::now().format("%Y%m%d%H%M%S");
-            let stamp = format!("{}", ts);
-            let (base, ext) = match file.name.rsplit_once('.') {
-                Some((b, e)) => (b.to_string(), e.to_string()),
-                None => (file.name.clone(), String::new()),
-            };
-            let target_name = if ext.is_empty() {
-                format!("{base}_{stamp}")
-            } else {
-                format!("{base}_{stamp}.{ext}")
-            };
+            // 115 目标目录文件名直接用原名：配合闪传前查重，同一文件
+            // 多次下载只保留首份，不会重复堆积带时间戳的副本。
+            let target_name = file.name.clone();
             // 闪传 + 签名证明 + status=4 回退：命中（7）用阿里 Range 读区间，
             // 被拒（4）时按 SHA1 在目标目录里直接找 pickcode。
             let reader = |range: &str| {
@@ -259,6 +249,27 @@ impl AliyunDrive115Driver {
                         Ok(bytes.to_vec())
                     }
             };
+            // 0) 先去 115 闪存目录按 SHA1 查重：命中 → 直接复用其 pickcode
+            //    下载（省一次闪传+签名回合，也避免重复闪传覆盖同名文件）。
+            if let Some(pc) = crate::commands::m115_rapid::find_pickcode_by_sha1(
+                &cookie, &ua, &dir_id, &file.sha1,
+            )
+            .await?
+            {
+                let (dlink, ck) = self.downurl(&ua, &cookie, &pc, &file.name).await?;
+                // The CDN rejects the download unless it carries the cookie
+                // issued by this downurl response (same rule as the 115 driver).
+                let mut hc = cookie.clone();
+                for c in &ck {
+                    hc.push_str("; ");
+                    hc.push_str(c);
+                }
+                result.push((file.clone(), dlink, vec![
+                    format!("User-Agent: {ua}"),
+                    format!("Cookie: {hc}"),
+                ]));
+                continue;
+            }
             // 兜底：缓存 cid 失效（目录被删/账号不同）→ 重新解析最近接收
             // 目录（无则创建），更新缓存后重试一次。
             let mut pickcode = crate::commands::m115_rapid::rapid_or_find_pickcode(

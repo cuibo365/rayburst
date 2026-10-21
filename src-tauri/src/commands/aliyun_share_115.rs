@@ -328,6 +328,32 @@ impl AliyunShare115Driver {
                     "阿里分享 drive_id 为空，请先浏览一次分享目录".into(),
                 ));
             }
+            // 0') 先去 115 闪存目录（最近接收）按同名+同大小找已有文件：
+            //     命中 → 直接复用其 pickcode 下载，跳过「转存→SHA1→闪传」
+            //     整条链（也避免重复转存与重复闪传堆积副本）。
+            let flash_pc = crate::commands::m115_rapid::find_pickcode_by_name(
+                &cookie, &ua, &dir_id, &file.name, file.size,
+            )
+            .await?;
+            if let Some(pc) = flash_pc {
+                let (dlink, ck) = self.downurl(&ua, &cookie, &pc, &file.name).await?;
+                // The CDN rejects the download unless it carries the cookie
+                // issued by this downurl response (same rule as 115 driver).
+                let mut hc = cookie.clone();
+                for c in &ck {
+                    hc.push_str("; ");
+                    hc.push_str(c);
+                }
+                result.push((
+                    file.clone(),
+                    dlink,
+                    vec![
+                        format!("User-Agent: {ua}"),
+                        format!("Cookie: {hc}"),
+                    ],
+                ));
+                continue;
+            }
             // 0) 目标目录查重：同名+同大小+SHA1 已存在 → 直接复用，避免
             //    重复转存创建多个相同文件。
             let pre_existing = self
@@ -389,18 +415,9 @@ impl AliyunShare115Driver {
                     file.name
                 )));
             }
-            // 3) 115 rapid upload
-            let ts = chrono::Local::now().format("%Y%m%d%H%M%S");
-            let stamp = format!("{}", ts);
-            let (base, ext) = match file.name.rsplit_once('.') {
-                Some((b, e)) => (b.to_string(), e.to_string()),
-                None => (file.name.clone(), String::new()),
-            };
-            let target_name = if ext.is_empty() {
-                format!("{base}_{stamp}")
-            } else {
-                format!("{base}_{stamp}.{ext}")
-            };
+            // 115 目标目录文件名直接用原名：配合闪传前查重，同一文件
+            // 多次下载只保留首份，不会重复堆积带时间戳的副本。
+            let target_name = file.name.clone();
             // 3) 115 rapid upload + sign proof + status=4 回退：命中（7）用
             // 转存到自己盘的文件通过网页域下载地址 Range 读取校验区间，
             // 被拒（4）时按 SHA1 在目标目录里直接找 pickcode。

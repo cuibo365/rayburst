@@ -110,7 +110,7 @@ pub async fn cloud_storage_import(
         .as_array()
         .ok_or_else(|| AppError::Database("导入文件缺少 storages 数组".into()))?;
 
-    let existing: std::collections::HashSet<String> = state
+    let mut existing: std::collections::HashSet<String> = state
         .0
         .list_storages()
         .await?
