@@ -63,7 +63,3 @@ src-tauri/gen/
 *.seed
 *.pid.lock
 .omx/
-
-# Local dev helper scripts (machine-specific paths, not for the repo)
-dev.bat
-build.bat
