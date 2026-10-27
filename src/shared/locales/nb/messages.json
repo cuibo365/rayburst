@@ -938,7 +938,8 @@
   "navigation": {
     "about": "Om",
     "settings": "Innstillinger",
-    "extensions": "Utvidelser"
+    "extensions": "Utvidelser",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Send nettlesernedlastinger til Rayburst og finn medier på nettet.",
@@ -948,5 +949,9 @@
     "media-preview": "Finn og forhåndsvis medier på nettet",
     "browser-controls": "Administrer nedlastinger fra nettleseren",
     "download-packages": "Last ned pakker"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

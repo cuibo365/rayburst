@@ -938,7 +938,8 @@
   "navigation": {
     "about": "Despre",
     "settings": "Setări",
-    "extensions": "Extensii"
+    "extensions": "Extensii",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Trimite descărcările din browser către Rayburst și descoperă conținut media pe web.",
@@ -948,5 +949,9 @@
     "media-preview": "Găsește și previzualizează conținut media web",
     "browser-controls": "Gestionează descărcările din browser",
     "download-packages": "Descarcă pachetele"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

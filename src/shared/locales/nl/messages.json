@@ -938,7 +938,8 @@
   "navigation": {
     "about": "Over",
     "settings": "Instellingen",
-    "extensions": "Extensies"
+    "extensions": "Extensies",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Stuur browserdownloads naar Rayburst en ontdek media op het web.",
@@ -948,5 +949,9 @@
     "media-preview": "Vind en bekijk webmedia",
     "browser-controls": "Beheer downloads vanuit je browser",
     "download-packages": "Pakketten downloaden"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

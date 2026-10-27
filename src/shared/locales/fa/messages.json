@@ -938,7 +938,8 @@
   "navigation": {
     "about": "درباره",
     "settings": "تنظیمات",
-    "extensions": "افزونه‌ها"
+    "extensions": "افزونه‌ها",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "دانلودهای مرورگر را به Rayburst بفرستید و محتوای رسانه‌ای وب را پیدا کنید.",
@@ -948,5 +949,9 @@
     "media-preview": "یافتن و پیش‌نمایش محتوای رسانه‌ای وب",
     "browser-controls": "مدیریت دانلودها از مرورگر",
     "download-packages": "دانلود بسته‌ها"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

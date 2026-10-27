@@ -938,7 +938,8 @@
   "navigation": {
     "about": "Σχετικά",
     "settings": "Ρυθμίσεις",
-    "extensions": "Επεκτάσεις"
+    "extensions": "Επεκτάσεις",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Στείλτε τις λήψεις του προγράμματος περιήγησης στο Rayburst και ανακαλύψτε πολυμέσα στον ιστό.",
@@ -948,5 +949,9 @@
     "media-preview": "Εύρεση και προεπισκόπηση πολυμέσων ιστού",
     "browser-controls": "Διαχείριση λήψεων από το πρόγραμμα περιήγησης",
     "download-packages": "Λήψη πακέτων"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

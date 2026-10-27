@@ -938,7 +938,8 @@
   "navigation": {
     "about": "Про програму",
     "settings": "Налаштування",
-    "extensions": "Розширення"
+    "extensions": "Розширення",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Передавайте завантаження з браузера до Rayburst і знаходьте медіафайли в інтернеті.",
@@ -948,5 +949,9 @@
     "media-preview": "Пошук і попередній перегляд медіафайлів в інтернеті",
     "browser-controls": "Керування завантаженнями з браузера",
     "download-packages": "Завантажити пакунки"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

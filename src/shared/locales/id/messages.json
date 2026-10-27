@@ -938,7 +938,8 @@
   "navigation": {
     "about": "Tentang",
     "settings": "Pengaturan",
-    "extensions": "Ekstensi"
+    "extensions": "Ekstensi",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Kirim unduhan browser ke Rayburst dan temukan media web.",
@@ -948,5 +949,9 @@
     "media-preview": "Temukan dan pratinjau media web",
     "browser-controls": "Kelola unduhan dari browser",
     "download-packages": "Unduh paket"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

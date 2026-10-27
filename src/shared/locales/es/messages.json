@@ -938,7 +938,8 @@
   "navigation": {
     "about": "Acerca de",
     "settings": "Ajustes",
-    "extensions": "Extensiones"
+    "extensions": "Extensiones",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Envía las descargas del navegador a Rayburst y descubre contenido multimedia en la web.",
@@ -948,5 +949,9 @@
     "media-preview": "Encuentra y previsualiza contenido multimedia web",
     "browser-controls": "Gestiona las descargas desde el navegador",
     "download-packages": "Descargar paquetes"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }
