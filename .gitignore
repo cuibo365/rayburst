@@ -66,3 +66,4 @@ src-tauri/gen/
 
 # Local dev helper scripts (machine-specific paths, not for the repo)
 dev.bat
+build.bat
