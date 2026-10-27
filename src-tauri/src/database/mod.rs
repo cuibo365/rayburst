@@ -4,7 +4,6 @@ mod history;
 mod rename;
 mod selection;
 mod storages;
-mod submissions;
 use crate::error::AppError;
 pub use credentials::HttpAuthCredential;
 pub use history::{HistoryPage, HistoryPageInput, HistoryRecord};
