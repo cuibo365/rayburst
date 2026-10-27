@@ -19,6 +19,30 @@ const router = createRouter({
           props: true,
         },
         {
+          path: '/cloud-drive',
+          name: 'cloud-drive',
+          component: () => import('@/views/CloudDriveView.vue'),
+          children: [
+            {
+              // `alias: ''` (rather than a separate `path: ''` + redirect)
+              // lets the sidebar link straight to this leaf route, so entering
+              // the drive is a single navigation. An extra redirect route made
+              // it a two-step navigation whose empty intermediate component
+              // deadlocked the `Transition mode="out-in"` wrapper in
+              // CloudDriveView, leaving the first render blank.
+              path: 'home',
+              alias: '',
+              name: 'cloud-drive-home',
+              component: () => import('@/views/DriveBrowserView.vue'),
+            },
+            {
+              path: 'storage',
+              name: 'cloud-drive-storage',
+              component: () => import('@/views/StorageManagerView.vue'),
+            },
+          ],
+        },
+        {
           path: '/preference',
           name: 'preference',
           component: () => import('@/views/PreferenceView.vue'),

@@ -17,3 +17,6 @@ export function useTaskDestinations() {
 }
 
 export const preferenceDestinations = ['general', 'downloads', 'bt', 'ed2k', 'network', 'advanced'] as const
+
+/** Cloud drive tab destinations (mirrors the preference-tabs pattern). */
+export const cloudDriveDestinations = ['home', 'storage'] as const

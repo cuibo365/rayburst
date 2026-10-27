@@ -33,6 +33,15 @@ async function setup(path: string) {
     routes: [
       { path: '/task/:status', name: 'task', component: page },
       {
+        path: '/cloud-drive',
+        name: 'cloud-drive',
+        component: page,
+        children: [
+          { path: 'home', alias: '', name: 'cloud-drive-home', component: page },
+          { path: 'storage', name: 'cloud-drive-storage', component: page },
+        ],
+      },
+      {
         path: '/preference',
         name: 'preference',
         component: PreferenceView,

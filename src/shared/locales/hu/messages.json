@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "Névjegy",
     "settings": "Beállítások",
-    "extensions": "Bővítmények"
+    "extensions": "Bővítmények",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Küldje a böngésző letöltéseit a Rayburst alkalmazásba, és fedezzen fel médiatartalmakat a weben.",
@@ -1035,5 +1036,9 @@
     "media-preview": "Webes média keresése és előnézete",
     "browser-controls": "Letöltések kezelése a böngészőből",
     "download-packages": "Csomagok letöltése"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

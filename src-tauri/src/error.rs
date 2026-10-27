@@ -49,6 +49,9 @@ pub enum AppError {
     /// History written by a newer release (schema version); left untouched.
     #[error("Database written by a newer version (schema {0})")]
     NewerDatabase(u32),
+    /// Cloud drive (网盘) login / open / download errors.
+    #[error("Cloud drive error: {0}")]
+    CloudDrive(String),
 }
 
 impl From<std::io::Error> for AppError {

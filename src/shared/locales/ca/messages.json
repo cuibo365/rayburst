@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "Quant a",
     "settings": "Configuració",
-    "extensions": "Extensions"
+    "extensions": "Extensions",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Envia les baixades del navegador a Rayburst i descobreix contingut multimèdia al web.",
@@ -1035,5 +1036,9 @@
     "media-preview": "Troba i previsualitza contingut multimèdia web",
     "browser-controls": "Gestiona les baixades des del navegador",
     "download-packages": "Baixa els paquets"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

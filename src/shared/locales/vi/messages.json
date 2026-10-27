@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "Giới thiệu",
     "settings": "Cài đặt",
-    "extensions": "Tiện ích"
+    "extensions": "Tiện ích",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Gửi các lượt tải từ trình duyệt đến Rayburst và khám phá nội dung đa phương tiện trên web.",
@@ -1035,5 +1036,9 @@
     "media-preview": "Tìm và xem trước nội dung đa phương tiện trên web",
     "browser-controls": "Quản lý lượt tải từ trình duyệt",
     "download-packages": "Tải gói cài đặt"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

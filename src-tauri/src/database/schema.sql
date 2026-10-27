@@ -51,3 +51,17 @@ CREATE TABLE IF NOT EXISTS file_renames (
     new_path TEXT NOT NULL,
     name TEXT NOT NULL
 );
+
+-- Cloud drive storages: one row per mounted driver instance (alist-style).
+CREATE TABLE IF NOT EXISTS cloud_storages (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  mount_path    TEXT    NOT NULL UNIQUE,
+  driver        TEXT    NOT NULL,
+  addition      TEXT    NOT NULL DEFAULT '{}',
+  status        TEXT    NOT NULL DEFAULT '正常',
+  disabled      INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0, 1)),
+  remark        TEXT    NOT NULL DEFAULT '',
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  modified      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

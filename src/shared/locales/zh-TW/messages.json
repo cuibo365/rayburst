@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "關於",
     "settings": "設定",
-    "extensions": "擴充功能"
+    "extensions": "擴充功能",
+    "cloud-drive": "網盤"
   },
   "extension": {
     "description": "接管下載，探索網頁媒體。",
@@ -1035,5 +1036,9 @@
     "media-preview": "探索並預覽網頁媒體",
     "browser-controls": "在瀏覽器中管理下載",
     "download-packages": "下載安裝套件"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

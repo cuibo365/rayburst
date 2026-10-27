@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "このアプリについて",
     "settings": "設定",
-    "extensions": "拡張機能"
+    "extensions": "拡張機能",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "ブラウザーのダウンロードを Rayburst に送り、ウェブ上のメディアを見つけます。",
@@ -1035,5 +1036,9 @@
     "media-preview": "ウェブメディアを検出・プレビュー",
     "browser-controls": "ブラウザーからダウンロードを管理",
     "download-packages": "パッケージをダウンロード"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

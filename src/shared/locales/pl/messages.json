@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "O programie",
     "settings": "Ustawienia",
-    "extensions": "Rozszerzenia"
+    "extensions": "Rozszerzenia",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Przesyłaj pobieranie z przeglądarki do Rayburst i odkrywaj multimedia w sieci.",
@@ -1035,5 +1036,9 @@
     "media-preview": "Wyszukuj multimedia w sieci i wyświetlaj podgląd",
     "browser-controls": "Zarządzaj pobieraniem z przeglądarki",
     "download-packages": "Pobierz pakiety"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

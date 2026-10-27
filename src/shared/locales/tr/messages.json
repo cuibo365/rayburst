@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "Hakkında",
     "settings": "Ayarlar",
-    "extensions": "Uzantılar"
+    "extensions": "Uzantılar",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Tarayıcı indirmelerini Rayburst'e gönderin ve web medyasını keşfedin.",
@@ -1035,5 +1036,9 @@
     "media-preview": "Web medyasını bulun ve önizleyin",
     "browser-controls": "İndirmeleri tarayıcıdan yönetin",
     "download-packages": "Paketleri indir"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

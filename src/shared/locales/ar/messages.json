@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "حول",
     "settings": "الإعدادات",
-    "extensions": "الإضافات"
+    "extensions": "الإضافات",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "أرسل تنزيلات المتصفح إلى Rayburst واكتشف الوسائط على الويب.",
@@ -1035,5 +1036,9 @@
     "media-preview": "اكتشف وسائط الويب وعاينها",
     "browser-controls": "أدر التنزيلات من متصفحك",
     "download-packages": "تنزيل الحزم"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

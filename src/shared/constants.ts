@@ -295,7 +295,7 @@ export const DEFAULT_APP_CONFIG = {
   resumeAllWhenAppLaunched: false, // don't flood bandwidth on launch
 
   // ── Auto Update ───────────────────────────────────────────────
-  autoCheckUpdate: true, // qBT checks every launch; security best practice
+  autoCheckUpdate: false, // default off: updater points at upstream release channel, not this fork
   autoCheckUpdateInterval: 0, // 0 means every frontend startup, including lightweight restores
   /** Linux-only: WebKitGTK hardware compositing, opt-in: it freezes or blanks windows on many drivers and virtual GPUs. */
   hardwareRendering: false,

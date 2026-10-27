@@ -1025,7 +1025,8 @@
   "navigation": {
     "about": "À propos",
     "settings": "Paramètres",
-    "extensions": "Extensions"
+    "extensions": "Extensions",
+    "cloud-drive": "Cloud Drive"
   },
   "extension": {
     "description": "Envoyez les téléchargements du navigateur vers Rayburst et découvrez les médias du Web.",
@@ -1035,5 +1036,9 @@
     "media-preview": "Trouvez et prévisualisez les médias du Web",
     "browser-controls": "Gérez les téléchargements depuis le navigateur",
     "download-packages": "Télécharger les paquets"
+  },
+  "cloudDrive": {
+    "home": "首页",
+    "storage": "存储"
   }
 }

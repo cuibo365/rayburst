@@ -3,11 +3,14 @@ mod credentials;
 mod history;
 mod rename;
 mod selection;
+mod storages;
+mod submissions;
 use crate::error::AppError;
 pub use credentials::HttpAuthCredential;
 pub use history::{HistoryPage, HistoryPageInput, HistoryRecord};
 use rusqlite::Connection;
 pub use selection::{MagnetSelectionPolicy, SelectionIntent};
+pub use storages::CloudStorage;
 use std::{path::Path, sync::Arc};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
 
@@ -42,6 +45,16 @@ impl Database {
         self.conn.lock().await.take();
     }
     async fn connection(&self) -> Result<MappedMutexGuard<'_, Connection>, AppError> {
+        // Cold-start race guard: initialization runs asynchronously after app
+        // startup, so any command that touches the DB waits (up to 5s) for the
+        // connection instead of failing on first entry. 50ms poll, non-blocking.
+        for _ in 0..100 {
+            if self.conn.lock().await.is_some() {
+                return MutexGuard::try_map(self.conn.lock().await, Option::as_mut)
+                    .map_err(|_| AppError::Database("Database is unavailable".into()));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         MutexGuard::try_map(self.conn.lock().await, Option::as_mut)
             .map_err(|_| AppError::Database("Database is unavailable".into()))
     }
