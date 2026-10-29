@@ -125,3 +125,9 @@ system-configuration = "0.7.0"
 [lints.clippy]
 unwrap_used = "deny"
 redundant_closure_for_method_calls = "warn"
+
+# Dev builds skip debug info entirely: saves ~1.2 GB of .pdb plus debug info
+# inside .rlib/.o. Trade-off: no variable inspection when debugging with a
+# debugger (line numbers still resolve in stack traces).
+[profile.dev]
+debug = false
