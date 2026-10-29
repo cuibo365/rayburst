@@ -656,6 +656,9 @@ pub async fn resolve_recent_recv_cid(cookie: &str, ua: &str) -> Result<String, A
 /// Rapid upload with sign proof, falling back to a SHA1 directory lookup when
 /// 115 rejects the rapid upload (status==4 — the file already exists in the
 /// target dir). Returns a pickcode either way.
+/// Rapid upload only — no directory fallback. The two aliyun→115 drivers
+/// already look up the flash dir by SHA1 / name+size before flashing, so a
+/// rejected flash is a real failure (the target dir lookup was already done).
 pub async fn rapid_or_find_pickcode<F, Fut>(
     cookie: &str,
     ua: &str,
@@ -671,18 +674,8 @@ where
     F: Fn(&str) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<u8>, AppError>>,
 {
-    match rapid_upload_with_range(
+    rapid_upload_with_range(
         cookie, ua, user_id, user_key, dir_id, file_name, file_size, file_id, range_reader,
     )
     .await
-    {
-        Ok(pickcode) => Ok(pickcode),
-        Err(e) => {
-            // status=4: 同目录已有同 SHA1 → 直接列出目标目录按 SHA1 找 pickcode。
-            if let Some(pc) = find_pickcode_by_sha1(cookie, ua, dir_id, file_id).await? {
-                return Ok(pc);
-            }
-            Err(e)
-        }
-    }
 }

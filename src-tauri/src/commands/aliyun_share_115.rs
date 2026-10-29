@@ -354,19 +354,35 @@ impl AliyunShare115Driver {
                 ));
                 continue;
             }
-            // 0) 目标目录查重：同名+同大小+SHA1 已存在 → 直接复用，避免
-            //    重复转存创建多个相同文件。
-            let pre_existing = self
-                .find_existing(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
-                .await?;
-            let (_copy_id, sha1) = if let Some(found) = pre_existing {
-                found
-            } else {
-                // 1) copy the share file into the own drive. If the copy
-                // fails and we were using the auto xiaoya dir, the folder may
-                // have been deleted: clear the cached id, re-learn and retry
-                // once.
-                let mut copy_result = self
+            // 1) copy the share file into the own drive. If the copy
+            // fails and we were using the auto xiaoya dir, the folder may
+            // have been deleted: clear the cached id, re-learn and retry
+            // once.
+            let mut copy_result = self
+                .copy_to_own(
+                    &client,
+                    &share_access,
+                    &share_token,
+                    &share_id,
+                    &share_drive,
+                    &own_drive,
+                    &copy_dir,
+                    &file.id,
+                    &file.name,
+                )
+                .await;
+            if copy_result.is_err() && !share.addition.copy_dir_id.is_empty() {
+                share.addition.copy_dir_id.clear();
+                let d = self.addition.open_copy_dir.trim();
+                if d.is_empty() || d == "root" {
+                    let (fid, _) = share
+                        .ensure_copy_dir(&client, &access, &own_drive)
+                        .await?;
+                    copy_dir = fid;
+                }
+                self.sync_caches(&share);
+                self.persist(db).await?;
+                copy_result = self
                     .copy_to_own(
                         &client,
                         &share_access,
@@ -379,36 +395,12 @@ impl AliyunShare115Driver {
                         &file.name,
                     )
                     .await;
-                if copy_result.is_err() && !share.addition.copy_dir_id.is_empty() {
-                    share.addition.copy_dir_id.clear();
-                    let d = self.addition.open_copy_dir.trim();
-                    if d.is_empty() || d == "root" {
-                        let (fid, _) = share
-                            .ensure_copy_dir(&client, &access, &own_drive)
-                            .await?;
-                        copy_dir = fid;
-                    }
-                    self.sync_caches(&share);
-                    self.persist(db).await?;
-                    copy_result = self
-                        .copy_to_own(
-                            &client,
-                            &share_access,
-                            &share_token,
-                            &share_id,
-                            &share_drive,
-                            &own_drive,
-                            &copy_dir,
-                            &file.id,
-                            &file.name,
-                        )
-                        .await;
-                }
-                copy_result?;
-                // 2) find the copied file in the own drive → SHA1 (web-domain)
-                self.find_copied(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
-                    .await?
-            };
+            }
+            copy_result?;
+            // 2) find the copied file in the own drive → SHA1 (web-domain)
+            let (_copy_id, sha1) = self
+                .find_copied(&mut share, db, &copy_dir, &own_drive, &file.name, file.size)
+                .await?;
             if sha1.is_empty() {
                 return Err(AppError::CloudDrive(format!(
                     "{} 转存后未取到 SHA1",
