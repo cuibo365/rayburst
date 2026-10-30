@@ -19,6 +19,7 @@ pub mod history;
 pub mod http_api;
 pub mod http_auth;
 mod http_client;
+mod netdisk_http;
 pub mod logging;
 pub mod m115_crypto;
 pub mod m115_rapid;

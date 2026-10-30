@@ -10,6 +10,7 @@
 //! storage row instead of a separate credential file.
 
 use crate::database::{CloudStorage, Database, DatabaseState};
+use crate::commands::netdisk_http;
 use crate::error::AppError;
 use crate::commands::aliyun_drive_115::{AliyunDrive115Addition, AliyunDrive115Driver};
 use crate::commands::aliyun_open::{AliyunOpenAddition, AliyunOpenDriver};
@@ -82,7 +83,7 @@ pub(crate) async fn m115_ua() -> String {
             let ver = match client {
                 Ok(c) => {
                     let json = match c.get(M115_APP_VERSION_URL).send().await {
-                        Ok(resp) => resp.json::<serde_json::Value>().await.ok(),
+                        Ok(resp) => netdisk_http::read_json::<serde_json::Value>(resp, "cloud-drive").await.ok(),
                         Err(_) => None,
                     };
                     // SDK Versions is `data: { win: {version_code, ...}, android: {...} }`
@@ -495,8 +496,7 @@ impl BaiduDriver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("刷新 access_token 失败: {e}")))?;
-        let json: serde_json::Value = resp
-            .json()
+        let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
             .await
             .map_err(|e| AppError::CloudDrive(format!("解析 token 响应失败: {e}")))?;
         let access = json["access_token"]
@@ -538,8 +538,7 @@ impl BaiduDriver {
                 .send()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求网盘文件列表失败: {e}")))?;
-            let text = resp
-                .text()
+            let text = netdisk_http::read_text(resp, "cloud-drive")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("读取文件列表响应失败: {e}")))?;
 
@@ -639,8 +638,7 @@ impl BaiduDriver {
                 .send()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求下载地址失败: {e}")))?;
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析下载地址失败: {e}")))?;
             match json["errno"].as_i64().unwrap_or(-1) {
@@ -753,6 +751,7 @@ impl QuarkDriver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("刷新夸克会话失败: {e}")))?;
+        netdisk_http::log_meta(&resp, "cloud-drive:quark-session");
         let new_puus = resp
             .headers()
             .get_all("set-cookie")
@@ -812,8 +811,7 @@ impl QuarkDriver {
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("请求夸克文件列表失败: {e}")))?;
                 let status = resp.status();
-                let text = resp
-                    .text()
+                let text = netdisk_http::read_text(resp, "cloud-drive")
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("读取夸克列表响应失败: {e}")))?;
                 let json: serde_json::Value = serde_json::from_str(&text)
@@ -923,6 +921,7 @@ impl QuarkDriver {
                     .send()
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("请求夸克下载地址失败: {e}")))?;
+                netdisk_http::log_meta(&resp, "cloud-drive:quark-download");
                 let status = resp.status();
                 // The download URL is signed against the *fresh* session cookie
                 // issued by this response (verified live: old cookie -> 412,
@@ -938,8 +937,7 @@ impl QuarkDriver {
                             .and_then(|kv| kv.trim().strip_prefix(&format!("{QUARK_PUUS_COOKIE}=")))
                             .map(str::to_string)
                     });
-                let json: serde_json::Value = resp
-                    .json()
+                let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("解析夸克下载地址失败: {e}")))?;
                 let code = json["code"].as_i64().unwrap_or(-1);
@@ -1082,8 +1080,7 @@ impl M115Driver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 115 文件列表失败: {e}")))?;
             let status = resp.status();
-            let text = resp
-                .text()
+            let text = netdisk_http::read_text(resp, "cloud-drive")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("读取 115 列表响应失败: {e}")))?;
             let json: serde_json::Value = serde_json::from_str(&text)
@@ -1194,6 +1191,7 @@ impl M115Driver {
                 .send()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 115 下载地址失败: {e}")))?;
+            netdisk_http::log_meta(&resp, "cloud-drive:115-downurl");
             let status = resp.status();
             // The CDN rejects the download request (HTTP 403) unless it carries
             // the cookie issued by this downurl response; merge every Set-Cookie
@@ -1205,8 +1203,7 @@ impl M115Driver {
                 .filter_map(|v| v.to_str().ok().map(str::to_string))
                 .filter(|s| !s.is_empty())
                 .collect();
-            let text = resp
-                .text()
+            let text = netdisk_http::read_text(resp, "cloud-drive")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("读取 115 下载响应失败: {e}")))?;
             let json: serde_json::Value = serde_json::from_str(&text)
@@ -1338,8 +1335,7 @@ impl M115ShareDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 115 分享列表失败: {e}")))?;
             let status = resp.status();
-            let text = resp
-                .text()
+            let text = netdisk_http::read_text(resp, "cloud-drive")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("读取 115 分享列表响应失败: {e}")))?;
             let json: serde_json::Value = serde_json::from_str(&text)
@@ -1434,6 +1430,7 @@ impl M115ShareDriver {
                 .send()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 115 分享下载地址失败: {e}")))?;
+            netdisk_http::log_meta(&resp, "cloud-drive:115-share-downurl");
             let status = resp.status();
             let set_cookies: Vec<String> = resp
                 .headers()
@@ -1442,8 +1439,7 @@ impl M115ShareDriver {
                 .filter_map(|v| v.to_str().ok().map(str::to_string))
                 .filter(|s| !s.is_empty())
                 .collect();
-            let text = resp
-                .text()
+            let text = netdisk_http::read_text(resp, "cloud-drive")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("读取 115 分享下载响应失败: {e}")))?;
             let json: serde_json::Value = serde_json::from_str(&text)
@@ -1632,8 +1628,7 @@ impl QuarkShareDriver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("获取分享 token 失败: {e}")))?;
-        let json: serde_json::Value = resp
-            .json()
+        let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
             .await
             .map_err(|e| AppError::CloudDrive(format!("解析分享 token 响应失败: {e}")))?;
         let code = json["code"].as_i64().unwrap_or(-1);
@@ -1695,8 +1690,7 @@ impl QuarkShareDriver {
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("请求夸克分享列表失败: {e}")))?;
                 let status = resp.status();
-                let text = resp
-                    .text()
+                let text = netdisk_http::read_text(resp, "cloud-drive")
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("读取夸克分享列表响应失败: {e}")))?;
                 let json: serde_json::Value = serde_json::from_str(&text)
@@ -1814,6 +1808,7 @@ impl QuarkShareDriver {
                         .send()
                         .await
                         .map_err(|e| AppError::CloudDrive(format!("请求夸克分享下载地址失败: {e}")))?;
+                    netdisk_http::log_meta(&resp, "cloud-drive:quark-share-download");
                     let status = resp.status();
                     // Same __puus rule as the own-drive download: the signed URL
                     // requires the fresh session cookie from this response.
@@ -1830,8 +1825,7 @@ impl QuarkShareDriver {
                                 })
                                 .map(str::to_string)
                         });
-                    let json: serde_json::Value = resp
-                        .json()
+                    let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
                         .await
                         .map_err(|e| AppError::CloudDrive(format!("解析夸克分享下载地址失败: {e}")))?;
                     let code = json["code"].as_i64().unwrap_or(-1);
@@ -2413,8 +2407,7 @@ pub async fn cloud_drive_quark_qrcode_create() -> Result<QuarkQrcodeCreated, App
         .send()
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求夸克登录二维码失败: {e}")))?;
-    let json: serde_json::Value = resp
-        .json()
+    let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
         .await
         .map_err(|e| AppError::CloudDrive(format!("解析夸克登录二维码响应失败: {e}")))?;
     let token = json["data"]["members"]["token"]
@@ -2473,8 +2466,7 @@ pub async fn cloud_drive_quark_qrcode_status(
         .send()
         .await
         .map_err(|e| AppError::CloudDrive(format!("查询夸克登录状态失败: {e}")))?;
-    let json: serde_json::Value = resp
-        .json()
+    let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
         .await
         .map_err(|e| AppError::CloudDrive(format!("解析夸克登录状态失败: {e}")))?;
     let status = json["status"].as_i64().unwrap_or(-1);
@@ -2502,6 +2494,7 @@ pub async fn cloud_drive_quark_qrcode_status(
                 });
             }
             let mut cookies: Vec<(String, String)> = Vec::new();
+            netdisk_http::log_meta(&info, "cloud-drive:quark-account-info");
             collect_set_cookie(info.headers(), &mut cookies);
             // Drive-pc config reissues the session cookie (`__puus`); it must
             // carry the account cookies from the previous step.
@@ -2517,7 +2510,10 @@ pub async fn cloud_drive_quark_qrcode_status(
                 .send()
                 .await;
             match config_resp {
-                Ok(r) => collect_set_cookie(r.headers(), &mut cookies),
+                Ok(r) => {
+                    netdisk_http::log_meta(&r, "cloud-drive:quark-puus-config");
+                    collect_set_cookie(r.headers(), &mut cookies)
+                }
                 Err(e) => log::warn!("cloud-drive: 获取 __puus 失败: {e}"),
             }
             if cookies.is_empty() {
@@ -2605,8 +2601,7 @@ pub async fn cloud_drive_115_qrcode_create(
         .send()
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求 115 登录二维码失败: {e}")))?;
-    let json: serde_json::Value = resp
-        .json()
+    let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
         .await
         .map_err(|e| AppError::CloudDrive(format!("解析 115 登录二维码响应失败: {e}")))?;
     let data = &json["data"];
@@ -2671,8 +2666,7 @@ pub async fn cloud_drive_115_qrcode_status(
         .send()
         .await
         .map_err(|e| AppError::CloudDrive(format!("查询 115 登录状态失败: {e}")))?;
-    let json: serde_json::Value = resp
-        .json()
+    let json: serde_json::Value = netdisk_http::read_json(resp, "cloud-drive")
         .await
         .map_err(|e| AppError::CloudDrive(format!("解析 115 登录状态失败: {e}")))?;
     let status = json["data"]["status"].as_i64().unwrap_or(-1);
@@ -2689,8 +2683,7 @@ pub async fn cloud_drive_115_qrcode_status(
                 .send()
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("换取 115 登录凭据失败: {e}")))?;
-            let login_json: serde_json::Value = login_resp
-                .json()
+            let login_json: serde_json::Value = netdisk_http::read_json(login_resp, "cloud-drive:115-login")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 115 登录凭据失败: {e}")))?;
             let cr = &login_json["data"]["cookie"];

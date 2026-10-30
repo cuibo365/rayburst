@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::aliyun_open::alist_file_to_drive;
+use crate::commands::netdisk_http;
 use crate::error::AppError;
 use crate::database::Database;
 
@@ -215,8 +216,7 @@ impl AliyunShareDriver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("刷新阿里 access_token 失败: {e}")))?;
-        let json: serde_json::Value = resp
-            .json()
+        let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-share")
             .await
             .map_err(|e| AppError::CloudDrive(format!("解析阿里 token 响应失败: {e}")))?;
         let access = json["access_token"]
@@ -256,8 +256,7 @@ impl AliyunShareDriver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("获取分享 token 失败: {e}")))?;
-        let json: serde_json::Value = resp
-            .json()
+        let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-share")
             .await
             .map_err(|e| AppError::CloudDrive(format!("解析分享 token 响应失败: {e}")))?;
         let share_token = json["share_token"]
@@ -309,8 +308,7 @@ impl AliyunShareDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求阿里分享列表失败: {e}")))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-share")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析阿里分享列表失败: {e}")))?;
             if !status.is_success() {
@@ -376,8 +374,7 @@ impl AliyunShareDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求阿里云盘目录列表失败: {e}")))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-share")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析阿里云盘目录列表失败: {e}")))?;
             if !status.is_success() {
@@ -566,8 +563,7 @@ impl AliyunShareDriver {
             // Read the body as text first so non-JSON replies (rate-limit /
             // risk-control HTML pages, empty bodies) surface their real
             // content instead of a bare "error decoding response body".
-            let text = resp
-                .text()
+            let text = netdisk_http::read_text(resp, "aliyun-share")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("读取 {} 下载响应失败: {e}", file.name)))?;
             if !status.is_success() {
@@ -620,8 +616,7 @@ impl AliyunShareDriver {
             .await
             .map_err(|e| AppError::CloudDrive(format!("获取自己的云盘信息失败: {e}")))?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "aliyun-share")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取云盘信息响应失败: {e}")))?;
         if !status.is_success() {
@@ -675,8 +670,7 @@ impl AliyunShareDriver {
             .await
             .map_err(|e| AppError::CloudDrive(format!("请求资源盘根目录失败: {e}")))?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "aliyun-share")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取资源盘根目录失败: {e}")))?;
         if !status.is_success() {
@@ -712,8 +706,7 @@ impl AliyunShareDriver {
             .await
             .map_err(|e| AppError::CloudDrive(format!("创建目录 {} 失败: {e}", AUTO_COPY_DIR)))?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "aliyun-share")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取创建目录响应失败: {e}")))?;
         if !status.is_success() {
@@ -767,8 +760,7 @@ impl AliyunShareDriver {
             .await
             .map_err(|e| AppError::CloudDrive(format!("转存 {} 到云盘失败: {e}", file.name)))?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "aliyun-share")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取转存响应失败: {e}")))?;
         if !status.is_success() {
@@ -807,8 +799,7 @@ impl AliyunShareDriver {
             .await
             .map_err(|e| AppError::CloudDrive(format!("请求自己的云盘目录失败: {e}")))?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "aliyun-share")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取云盘目录响应失败: {e}")))?;
         if !status.is_success() {

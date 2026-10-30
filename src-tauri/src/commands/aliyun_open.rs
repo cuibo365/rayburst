@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::commands::netdisk_http;
 use crate::error::AppError;
 use crate::database::Database;
 
@@ -140,8 +141,7 @@ impl AliyunOpenDriver {
                     .send()
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("调用 messense 刷新接口失败: {e}")))?;
-                json = resp
-                    .json()
+                json = netdisk_http::read_json(resp, "aliyun-open")
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("解析 messense 刷新响应失败: {e}")))?;
             }
@@ -159,8 +159,7 @@ impl AliyunOpenDriver {
                     .send()
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("调用 xiaoya 刷新接口失败: {e}")))?;
-                json = resp
-                    .json()
+                json = netdisk_http::read_json(resp, "aliyun-open")
                     .await
                     .map_err(|e| AppError::CloudDrive(format!("解析 xiaoya 刷新响应失败: {e}")))?;
             }
@@ -218,8 +217,7 @@ impl AliyunOpenDriver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("获取阿里云盘信息失败: {e}")))?;
-        let json: serde_json::Value = resp
-            .json()
+        let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-open")
             .await
             .map_err(|e| AppError::CloudDrive(format!("解析阿里云盘信息失败: {e}")))?;
         // alist picks `{drive_type}_drive_id` (default / resource / backup),
@@ -290,8 +288,7 @@ impl AliyunOpenDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求阿里云盘列表失败: {e}")))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-open")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析阿里云盘列表失败: {e}")))?;
             if !status.is_success() {
@@ -338,8 +335,7 @@ impl AliyunOpenDriver {
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 {} 下载地址失败: {e}", file.name)))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-open")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 {} 下载响应失败: {e}", file.name)))?;
             if !status.is_success() {

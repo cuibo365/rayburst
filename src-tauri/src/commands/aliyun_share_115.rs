@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::aliyun_share::{AliyunShareAddition, AliyunShareDriver};
+use crate::commands::netdisk_http;
 use crate::error::AppError;
 use crate::commands::m115_crypto;
 use crate::database::Database;
@@ -438,8 +439,7 @@ impl AliyunShare115Driver {
                                 ))
                             })?;
                         let status = resp.status();
-                        let text = resp
-                            .text()
+                        let text = netdisk_http::read_text(resp, "aliyun-share-115")
                             .await
                             .map_err(|e| AppError::CloudDrive(format!("读取阿里下载响应失败: {e}")))?;
                         if !status.is_success() {
@@ -454,7 +454,7 @@ impl AliyunShare115Driver {
                         let url = j["url"].as_str().ok_or_else(|| {
                             AppError::CloudDrive(format!("阿里云盘未返回 {} 的下载地址", file_name))
                         })?;
-                        let bytes = client
+                        let range_resp = client
                             .get(url)
                             .header("Range", format!("bytes={range}"))
                             .header("Referer", "https://www.alipan.com/")
@@ -462,8 +462,8 @@ impl AliyunShare115Driver {
                             .await
                             .map_err(|e| {
                                 AppError::CloudDrive(format!("下载阿里文件校验区间失败: {e}"))
-                            })?
-                            .bytes()
+                            })?;
+                        let bytes = netdisk_http::read_bytes(range_resp, "aliyun-share-115:range-check")
                             .await
                             .map_err(|e| {
                                 AppError::CloudDrive(format!("读取阿里文件校验区间失败: {e}"))
@@ -540,8 +540,7 @@ impl AliyunShare115Driver {
             .await
             .map_err(|e| AppError::CloudDrive(format!("转存 {} 到云盘失败: {e}", name)))?;
         let status = resp.status();
-        let json: serde_json::Value = resp
-            .json()
+        let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-share-115")
             .await
             .map_err(|e| AppError::CloudDrive(format!("解析转存响应失败: {e}")))?;
         if !status.is_success() {
@@ -624,6 +623,7 @@ impl AliyunShare115Driver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("请求 115 下载地址失败: {e}")))?;
+        netdisk_http::log_meta(&resp, "aliyun-share-115:downurl");
         let status = resp.status();
         let set_cookies: Vec<String> = resp
             .headers()
@@ -632,8 +632,7 @@ impl AliyunShare115Driver {
             .filter_map(|v| v.to_str().ok().map(str::to_string))
             .filter(|s| !s.is_empty())
             .collect();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "aliyun-share-115")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取 115 下载响应失败: {e}")))?;
         let json: serde_json::Value = serde_json::from_str(&text)

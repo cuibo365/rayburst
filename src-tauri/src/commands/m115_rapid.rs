@@ -21,6 +21,7 @@ use rand::RngCore;
 use sha1::Sha1;
 use sha2::Digest;
 
+use crate::commands::netdisk_http;
 use crate::error::AppError;
 
 /// Upload endpoint (SDK `ApiUploadInit`).
@@ -364,8 +365,7 @@ pub async fn rapid_upload_signed(
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求 115 闪传失败: {e}")))?;
     let status_code = resp.status();
-    let body_bytes = resp
-        .bytes()
+    let body_bytes = netdisk_http::read_bytes(resp, "115-rapid")
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取 115 闪传响应失败: {e}")))?;
     if !status_code.is_success() {
@@ -375,6 +375,8 @@ pub async fn rapid_upload_signed(
         )));
     }
     let plain = cipher.decrypt(&body_bytes)?;
+    // 线上响应是密文，这里记录解密后的信封，便于在 debug 日志里看到真实状态与 pickcode。
+    netdisk_http::log_body("115-rapid:upload-init", &String::from_utf8_lossy(&plain));
     let json: serde_json::Value = serde_json::from_slice(&plain)
         .map_err(|e| AppError::CloudDrive(format!("解析 115 闪传响应失败: {e}")))?;
     let status = json["status"].as_i64().unwrap_or(0);
@@ -436,8 +438,7 @@ pub async fn find_pickcode_by_sha1(
             .await
             .map_err(|e| AppError::CloudDrive(format!("列出 115 目录失败: {e}")))?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "115-rapid")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取 115 目录响应失败: {e}")))?;
         if !status.is_success() {
@@ -502,8 +503,7 @@ pub async fn find_pickcode_by_name(
             .await
             .map_err(|e| AppError::CloudDrive(format!("列出 115 目录失败: {e}")))?;
         let status = resp.status();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "115-rapid")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取 115 目录响应失败: {e}")))?;
         if !status.is_success() {
@@ -559,8 +559,7 @@ pub async fn fetch_upload_userkey(cookie: &str, ua: &str) -> Result<String, AppE
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求 115 uploadinfo 失败: {e}")))?;
     let status = resp.status();
-    let text = resp
-        .text()
+    let text = netdisk_http::read_text(resp, "115-rapid")
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取 115 uploadinfo 失败: {e}")))?;
     if !status.is_success() {
@@ -599,8 +598,7 @@ pub async fn resolve_recent_recv_cid(cookie: &str, ua: &str) -> Result<String, A
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求 115 根目录失败: {e}")))?;
     let status = resp.status();
-    let text = resp
-        .text()
+    let text = netdisk_http::read_text(resp, "115-rapid")
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取 115 根目录失败: {e}")))?;
     if !status.is_success() {
@@ -628,8 +626,7 @@ pub async fn resolve_recent_recv_cid(cookie: &str, ua: &str) -> Result<String, A
         .await
         .map_err(|e| AppError::CloudDrive(format!("创建 115 最近接收目录失败: {e}")))?;
     let status = resp.status();
-    let text = resp
-        .text()
+    let text = netdisk_http::read_text(resp, "115-rapid")
         .await
         .map_err(|e| AppError::CloudDrive(format!("读取创建 115 目录响应失败: {e}")))?;
     if !status.is_success() {

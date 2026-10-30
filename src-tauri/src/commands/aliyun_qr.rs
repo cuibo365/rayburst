@@ -10,6 +10,7 @@
 //! endpoint, shared by both channels) → on `LoginSuccess` exchange the
 //! authCode via `aliyun_qr_exchange` → refresh_token + its refresh endpoint.
 
+use crate::commands::netdisk_http;
 use crate::error::AppError;
 use base64::Engine as _;
 
@@ -85,8 +86,7 @@ pub async fn aliyun_qr_create(channel: String) -> Result<AliyunQrCreated, AppErr
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 messense 二维码失败: {e}")))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-qr")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 messense 二维码响应失败: {e}")))?;
             if !status.is_success() {
@@ -109,8 +109,7 @@ pub async fn aliyun_qr_create(channel: String) -> Result<AliyunQrCreated, AppErr
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 xiaoya 二维码失败: {e}")))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-qr")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 xiaoya 二维码响应失败: {e}")))?;
             if !status.is_success() {
@@ -152,8 +151,7 @@ pub async fn aliyun_qr_status(sid: String) -> Result<AliyunQrStatus, AppError> {
         .await
         .map_err(|e| AppError::CloudDrive(format!("查询扫码状态失败: {e}")))?;
     let status = resp.status();
-    let json: serde_json::Value = resp
-        .json()
+    let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-qr")
         .await
         .map_err(|e| AppError::CloudDrive(format!("解析扫码状态响应失败: {e}")))?;
     if !status.is_success() {
@@ -209,8 +207,7 @@ pub async fn aliyun_qr_exchange(
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 messense 换 token 失败: {e}")))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-qr")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 messense 换 token 响应失败: {e}")))?;
             if !status.is_success() {
@@ -234,8 +231,7 @@ pub async fn aliyun_qr_exchange(
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("请求 xiaoya 换 token 失败: {e}")))?;
             let status = resp.status();
-            let json: serde_json::Value = resp
-                .json()
+            let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-qr")
                 .await
                 .map_err(|e| AppError::CloudDrive(format!("解析 xiaoya 换 token 响应失败: {e}")))?;
             if !status.is_success() {
@@ -312,8 +308,7 @@ pub async fn aliyun_web_qr_create() -> Result<AliyunWebQrCreated, AppError> {
         .await
         .map_err(|e| AppError::CloudDrive(format!("请求 alistgo 网页 token 二维码失败: {e}")))?;
     let status = resp.status();
-    let json: serde_json::Value = resp
-        .json()
+    let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-qr")
         .await
         .map_err(|e| AppError::CloudDrive(format!("解析 alistgo 网页 token 二维码响应失败: {e}")))?;
     if !status.is_success() {
@@ -349,8 +344,7 @@ pub async fn aliyun_web_qr_status(ck: String, t: String) -> Result<AliyunWebQrSt
         .await
         .map_err(|e| AppError::CloudDrive(format!("查询网页 token 扫码状态失败: {e}")))?;
     let status = resp.status();
-    let json: serde_json::Value = resp
-        .json()
+    let json: serde_json::Value = netdisk_http::read_json(resp, "aliyun-qr")
         .await
         .map_err(|e| AppError::CloudDrive(format!("解析网页 token 扫码状态响应失败: {e}")))?;
     if !status.is_success() {

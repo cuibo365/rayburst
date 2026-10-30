@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::aliyun_open::{
     default_drive_type, default_root, AliyunOpenAddition, AliyunOpenDriver,
 };
+use crate::commands::netdisk_http;
 use crate::error::AppError;
 use crate::commands::m115_crypto;
 use crate::database::Database;
@@ -230,20 +231,19 @@ impl AliyunDrive115Driver {
                             .send()
                             .await
                             .map_err(|e| AppError::CloudDrive(format!("获取阿里下载地址失败: {e}")))?;
-                        let j: serde_json::Value = resp
-                            .json()
+                        let j: serde_json::Value = netdisk_http::read_json(resp, "aliyun-115")
                             .await
                             .map_err(|e| AppError::CloudDrive(format!("解析阿里下载地址失败: {e}")))?;
                         let url = j["url"].as_str().ok_or_else(|| {
                             AppError::CloudDrive("阿里下载地址为空（文件可能已失效）".into())
                         })?;
-                        let bytes = client
+                        let range_resp = client
                             .get(url)
                             .header("Range", format!("bytes={range}"))
                             .send()
                             .await
-                            .map_err(|e| AppError::CloudDrive(format!("下载阿里文件校验区间失败: {e}")))?
-                            .bytes()
+                            .map_err(|e| AppError::CloudDrive(format!("下载阿里文件校验区间失败: {e}")))?;
+                        let bytes = netdisk_http::read_bytes(range_resp, "aliyun-115:range-check")
                             .await
                             .map_err(|e| AppError::CloudDrive(format!("读取阿里文件校验区间失败: {e}")))?;
                         Ok(bytes.to_vec())
@@ -333,6 +333,7 @@ impl AliyunDrive115Driver {
             .send()
             .await
             .map_err(|e| AppError::CloudDrive(format!("请求 115 下载地址失败: {e}")))?;
+        netdisk_http::log_meta(&resp, "aliyun-115:downurl");
         let status = resp.status();
         let set_cookies: Vec<String> = resp
             .headers()
@@ -341,8 +342,7 @@ impl AliyunDrive115Driver {
             .filter_map(|v| v.to_str().ok().map(str::to_string))
             .filter(|s| !s.is_empty())
             .collect();
-        let text = resp
-            .text()
+        let text = netdisk_http::read_text(resp, "aliyun-115")
             .await
             .map_err(|e| AppError::CloudDrive(format!("读取 115 下载响应失败: {e}")))?;
         let json: serde_json::Value = serde_json::from_str(&text)

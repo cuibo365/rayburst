@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use log::kv::{Key, Value, VisitSource};
 use serde::{Deserialize, Serialize};
@@ -76,23 +76,46 @@ fn decode_level(level: u8) -> log::LevelFilter {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct LogLevelControl(Arc<AtomicU8>);
+/// Process-wide log level, shared by [`LogLevelControl`] so code without an
+/// `AppHandle` (HTTP hot paths that would otherwise format large log bodies)
+/// can check whether `debug!` records are wanted at all.  `Info` until a
+/// preference is loaded.
+static ACTIVE_LEVEL: AtomicU8 = AtomicU8::new(3);
+
+pub(crate) fn active_level() -> log::LevelFilter {
+    decode_level(ACTIVE_LEVEL.load(Ordering::Acquire))
+}
+
+fn store_active_level(level: log::LevelFilter) {
+    ACTIVE_LEVEL.store(encode_level(level), Ordering::Release);
+}
+
+/// Whether the user's log level admits `debug!` records.
+///
+/// Tauri's log plugin pins the global max level at `Debug` and filters records
+/// at runtime, so `log::log_enabled!` cannot answer this question.
+pub(crate) fn debug_enabled() -> bool {
+    active_level() >= log::LevelFilter::Debug
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct LogLevelControl;
 
 impl LogLevelControl {
     pub(crate) fn new(level: log::LevelFilter) -> Self {
-        Self(Arc::new(AtomicU8::new(encode_level(level))))
+        store_active_level(level);
+        Self
     }
 
     pub(crate) fn set(&self, value: &str) -> Result<log::LevelFilter, String> {
         let level =
             parse_level(value).ok_or_else(|| format!("Invalid Rayburst log level: {value}"))?;
-        self.0.store(encode_level(level), Ordering::Release);
+        store_active_level(level);
         Ok(level)
     }
 
     pub(crate) fn level(&self) -> log::LevelFilter {
-        decode_level(self.0.load(Ordering::Acquire))
+        active_level()
     }
 
     pub(crate) fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
