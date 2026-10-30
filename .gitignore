@@ -57,6 +57,7 @@ src-tauri/gen/
 .gemini/
 .agent*/
 .aider*
+.workbuddy/
 
 # Runtime data
 *.pid
