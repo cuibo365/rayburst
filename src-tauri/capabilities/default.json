@@ -14,7 +14,6 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-focus",
-    "allow-app-commands",
     "opener:default",
     "store:default",
     "dialog:default",
